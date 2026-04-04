@@ -20,7 +20,8 @@ import {
   ZoomIn,
   Mail,
   Upload,
-  Globe
+  Globe,
+  Video
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -31,6 +32,7 @@ const iconMap = {
   strategy: Sparkles,
   copy: FileText,
   image: ImageIcon,
+  video: Video,
   research: Search,
   exa_research: Globe,
   timeline: Calendar,
@@ -44,6 +46,7 @@ const typeColorMap = {
   strategy: 'bg-blue-500/10 border-blue-500/30',
   copy: 'bg-orange-500/10 border-orange-500/30',
   image: 'bg-pink-500/10 border-pink-500/30',
+  video: 'bg-rose-500/10 border-rose-500/30',
   research: 'bg-green-500/10 border-green-500/30',
   exa_research: 'bg-cyan-500/10 border-cyan-500/30',
   timeline: 'bg-red-500/10 border-red-500/30',
@@ -64,6 +67,7 @@ const badgeLabelMap = {
   strategy: 'Research',
   copy: 'Creative',
   image: 'Creative',
+  video: 'Creative',
   research: 'Research',
   exa_research: 'Web Research',
   timeline: 'Strategy',
@@ -370,6 +374,15 @@ function AgentNode({ data, id }) {
                   <p className="text-[10px] text-muted-foreground">Searches the web for leads, market data & competitor insights. Generates downloadable CSV.</p>
                 </div>
               )}
+              {data.type === 'video' && (
+                <div className="mb-2 p-2 border border-rose-500/20 rounded-md bg-rose-500/5">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Video className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                    <span className="text-[10px] font-semibold text-rose-600 dark:text-rose-400">Cinematic Video Agent</span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">Generates cinematic visual concepts and renders short video clips using Google Veo AI.</p>
+                </div>
+              )}
               <p className="leading-relaxed">{data.promptContext || 'Ready to generate content based on campaign strategy.'}</p>
             </div>
           )}
@@ -378,7 +391,7 @@ function AgentNode({ data, id }) {
             <div className="flex flex-col items-center justify-center py-6 gap-2">
               <Loader2 className="w-6 h-6 animate-spin text-primary" />
               <p className="text-xs text-muted-foreground">
-                {data.type === 'exa_research' ? 'Searching the web for leads & insights...' : 'Generating content...'}
+                {data.type === 'exa_research' ? 'Searching the web for leads & insights...' : data.type === 'video' ? 'Generating cinematic video concepts...' : 'Generating content...'}
               </p>
             </div>
           )}
@@ -405,6 +418,118 @@ function AgentNode({ data, id }) {
                               </div>
                             </div>
                           ))}
+                        </div>
+                      );
+                    }
+                  } catch {}
+                  return <p className="whitespace-pre-wrap leading-relaxed">{truncatedOutput}</p>;
+                })()
+              ) : data.type === 'video' ? (
+                (() => {
+                  try {
+                    const parsed = JSON.parse(displayOutput);
+                    const prompts = parsed?.visualPrompts ?? [];
+                    if (Array.isArray(prompts) && prompts.length > 0) {
+                      return (
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-semibold text-rose-600 dark:text-rose-400 mb-1">
+                            🎬 {prompts.length} Scene{prompts.length !== 1 ? 's' : ''} Ready
+                          </p>
+                          {prompts.map((scene, idx) => (
+                            <div key={idx} className="p-2 border border-rose-500/20 rounded-md bg-rose-500/5">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-[10px] font-medium text-rose-600 dark:text-rose-400">
+                                  {scene.sceneName || `Scene ${idx + 1}`}
+                                </span>
+                                <span className="text-[9px] text-muted-foreground">{scene.duration || 5}s</span>
+                              </div>
+                              <p className="text-[10px] text-muted-foreground line-clamp-2 mb-1.5">{scene.prompt?.substring(0, 80)}...</p>
+                              {data.generatedVideos?.[`prompt_${idx}`] ? (
+                                <video 
+                                  src={data.generatedVideos[`prompt_${idx}`]} 
+                                  controls 
+                                  className="w-full rounded-md border border-border"
+                                  style={{ maxHeight: '120px' }}
+                                />
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="w-full h-6 text-[10px] border-rose-500/30 text-rose-500 hover:bg-rose-500/10"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    try {
+                                      const res = await fetch('/api/video-studio/generate-video', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          prompt: scene.prompt,
+                                          aspectRatio: scene.aspectRatio || '16:9',
+                                          duration: scene.duration || 5,
+                                          sceneName: scene.sceneName,
+                                          promptIndex: idx,
+                                          promptKey: `prompt_${idx}`,
+                                          agentType: 'cinematic-teaser',
+                                          agentId: id,
+                                          projectName: parsed.projectName || 'campaign',
+                                        }),
+                                      });
+                                      const result = await res.json();
+                                      if (result.operationId) {
+                                        // Start polling
+                                        const poll = async () => {
+                                          const pollRes = await fetch(`/api/video-studio/generate-video?operationId=${result.operationId}`);
+                                          const pollData = await pollRes.json();
+                                          if (pollData.status === 'completed' && pollData.videoUrl) {
+                                            updateNodeData(id, {
+                                              generatedVideos: {
+                                                ...(data.generatedVideos || {}),
+                                                [`prompt_${idx}`]: pollData.videoUrl,
+                                              }
+                                            });
+                                          } else if (pollData.status === 'retrying_silent' && pollData.newOperationId) {
+                                            // Audio filter triggered — auto-retrying with silent Veo 2.0
+                                            const pollRetry = async () => {
+                                              const r2 = await fetch(`/api/video-studio/generate-video?operationId=${pollData.newOperationId}`);
+                                              const d2 = await r2.json();
+                                              if (d2.status === 'completed' && d2.videoUrl) {
+                                                updateNodeData(id, {
+                                                  generatedVideos: {
+                                                    ...(data.generatedVideos || {}),
+                                                    [`prompt_${idx}`]: d2.videoUrl,
+                                                  }
+                                                });
+                                              } else if (d2.status === 'processing') {
+                                                setTimeout(pollRetry, 5000);
+                                              } else if (d2.shouldPoll === false) {
+                                                alert(`❌ Video generation failed: ${d2.error || 'Unknown error'}`);
+                                              }
+                                            };
+                                            setTimeout(pollRetry, 5000);
+                                          } else if (pollData.status === 'processing') {
+                                            setTimeout(poll, 5000);
+                                          } else if (pollData.status === 'content_filtered') {
+                                            alert(`⚠️ Scene "${scene.sceneName || idx + 1}" was blocked by safety filters. Try rephrasing the prompt with more generic, professional language.`);
+                                          } else if (pollData.shouldPoll === false) {
+                                            alert(`❌ Video generation failed: ${pollData.error || 'Unknown error'}`);
+                                          }
+                                        };
+                                        setTimeout(poll, 5000);
+                                      }
+                                    } catch (err) {
+                                      console.error('Video gen failed:', err);
+                                    }
+                                  }}
+                                >
+                                  <Video className="w-3 h-3 mr-1" />
+                                  Visualize This
+                                </Button>
+                              )}
+                            </div>
+                          ))}
+                          {parsed.concept && (
+                            <p className="text-[10px] text-muted-foreground italic mt-1">{parsed.concept}</p>
+                          )}
                         </div>
                       );
                     }
