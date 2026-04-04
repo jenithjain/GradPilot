@@ -386,7 +386,7 @@ function CampaignPageContent() {
             </div>
 
             <div className="space-y-4">
-              {quickExamples.map((example) => (
+              {quickExamples.map((example, index) => (
                 <motion.button
                   key={example.title}
                   initial={{ opacity: 0, y: 10 }}

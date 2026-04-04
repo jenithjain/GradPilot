@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { WorkflowNode, WorkflowEdge, CampaignStrategy } from '@/types/workflow';
 
 interface CampaignStore {
@@ -25,7 +26,9 @@ interface CampaignStore {
   reset: () => void;
 }
 
-export const useCampaignStore = create<CampaignStore>((set) => ({
+export const useCampaignStore = create<CampaignStore>()(
+  persist(
+    (set) => ({
   // Initial state
   brief: '',
   strategy: null,
@@ -120,4 +123,15 @@ export const useCampaignStore = create<CampaignStore>((set) => ({
       isGeneratingWorkflow: false,
       error: null,
     }),
-}));
+  }),
+  {
+    name: 'gradpilot-campaign',
+    partialize: (state) => ({
+      brief: state.brief,
+      strategy: state.strategy,
+      nodes: state.nodes,
+      edges: state.edges,
+    }),
+  }
+  )
+);
