@@ -8,6 +8,7 @@ import { useSession } from "next-auth/react";
 import { AvatarPicker } from "@/components/ui/avatar-picker";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import LiveKYCChecklist from "@/components/LiveKYCChecklist";
 import {
   Rocket,
   Sparkles,

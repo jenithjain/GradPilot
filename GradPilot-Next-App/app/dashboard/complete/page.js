@@ -45,7 +45,7 @@ function deriveDisplayData(profile) {
   const countries = Array.isArray(get("targetCountries")) ? get("targetCountries") : [];
   const primaryCountry = countries[0] || "UK";
   const course = get("courseInterest") || get("fieldOfStudy") || "Your Course";
-  const testStatus = get("englishTestStatus") || "";
+  const testStatus = get("englishTestStatus") || get("testStatus") || "";
   const needsTest = !testStatus || /not|preparing|planning|soon/i.test(testStatus);
   const budget = get("budgetRange") || "—";
   const timeline = get("applicationTimeline") || "In Progress";
@@ -57,18 +57,87 @@ function deriveDisplayData(profile) {
   const phone = get("phoneNumber") || "";
   const email = get("contactEmail") || "";
 
-  // Readiness score calculation
-  let readinessScore = 0;
-  if (education) readinessScore += 15;
-  if (gpa) readinessScore += 12;
-  if (!needsTest) readinessScore += 25;
-  else if (/preparing|planning|soon/i.test(testStatus)) readinessScore += 10;
-  if (budget && budget !== "—") readinessScore += 15;
-  if (countries.length > 0) readinessScore += 10;
-  if (timeline) readinessScore += 8;
-  if (course) readinessScore += 8;
-  if (institution) readinessScore += 7;
-  readinessScore = Math.min(readinessScore, 100);
+  // Readiness score calculation (quality-weighted, not just field presence)
+  const gpaScoreMap = {
+    "Below 50%": 35,
+    "50-60%": 50,
+    "60-70%": 62,
+    "70-80%": 74,
+    "80-90%": 86,
+    "90%+": 95,
+  };
+  const testStatusScoreMap = {
+    "Score Available": 90,
+    "Taken": 90,
+    "Not Required": 80,
+    "Booked Exam": 68,
+    "Preparing": 55,
+    "Not Started": 35,
+    "Not Taken": 35,
+  };
+  const testScoreMap = {
+    "Below 5.5": 35,
+    "5.5-6.0": 50,
+    "6.0-6.5": 62,
+    "6.5-7.0": 74,
+    "7.0-7.5": 86,
+    "7.5+": 94,
+    "N/A": 65,
+  };
+  const budgetScoreMap = {
+    "Below ₹10 Lakhs": 45,
+    "₹10-20 Lakhs": 60,
+    "₹20-30 Lakhs": 75,
+    "₹30-50 Lakhs": 85,
+    "₹50 Lakhs+": 90,
+  };
+  const timelineScoreMap = {
+    "Immediately": 85,
+    "Within 1 Month": 78,
+    "1-3 Months": 70,
+    "3-6 Months": 60,
+    "6+ Months": 52,
+  };
+
+  const educationScore = education ? 75 : 35;
+  const gpaScore = gpaScoreMap[gpa] ?? (gpa ? 68 : 35);
+  const academicsScore = Math.round((educationScore + gpaScore) / 2);
+
+  const testStatusScore = testStatusScoreMap[testStatus] ?? (needsTest ? 45 : 80);
+  const testScoreRaw = get("testScore");
+  const testScore = testScoreMap[testScoreRaw] ?? (testScoreRaw ? 65 : 45);
+  const languageScore = Math.round((testStatusScore + testScore) / 2);
+
+  const budgetScore = budgetScoreMap[budget] ?? (budget && budget !== "—" ? 70 : 40);
+  const timelineScore = timelineScoreMap[timeline] ?? (timeline && timeline !== "In Progress" ? 65 : 50);
+  const countryScore = Math.min(90, 45 + countries.length * 15);
+  const planningScore = Math.round((budgetScore + timelineScore + countryScore) / 3);
+
+  const completenessFields = [
+    education,
+    field,
+    institution,
+    gpa,
+    testStatus,
+    testScoreRaw,
+    countries.length ? "ok" : "",
+    course,
+    timeline,
+    budget,
+  ];
+  const filledCount = completenessFields.filter((v) => !!v).length;
+  const completenessScore = Math.round((filledCount / completenessFields.length) * 100);
+
+  let readinessScore = Math.round(
+    academicsScore * 0.3 +
+    languageScore * 0.25 +
+    planningScore * 0.25 +
+    completenessScore * 0.2
+  );
+
+  // Keep realistic headroom; pending language test should not appear fully ready.
+  if (needsTest) readinessScore = Math.min(readinessScore, 88);
+  readinessScore = Math.max(30, Math.min(readinessScore, 97));
 
   const readinessLabel = readinessScore >= 75 ? "Strong Profile" : readinessScore >= 50 ? "Developing" : "Early Stage";
   const readinessColor = readinessScore >= 75 ? "#10b981" : readinessScore >= 50 ? "#f59e0b" : "#ef4444";
@@ -151,6 +220,12 @@ export default function CompleteDashboard() {
   const [analysis, setAnalysis] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState(null);
+  const [analysisMeta, setAnalysisMeta] = useState({
+    cached: false,
+    source: null,
+    usedGemini: false,
+    missingFields: [],
+  });
 
   // Voice agent state
   const [showVoice, setShowVoice] = useState(false);
@@ -178,7 +253,13 @@ export default function CompleteDashboard() {
         throw new Error(errBody.details || errBody.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      setAnalysis(data.analysis);
+      setAnalysis(data.analysis || null);
+      setAnalysisMeta({
+        cached: !!data.cached,
+        source: data.source || null,
+        usedGemini: !!data.usedGemini,
+        missingFields: Array.isArray(data.missingFields) ? data.missingFields : [],
+      });
     } catch (err) {
       console.error("[Dashboard] Analysis failed:", err);
       setAnalyzeError(err.message);
@@ -569,7 +650,13 @@ export default function CompleteDashboard() {
                   </span>
                 ) : (
                   <span className="ml-auto rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/25">
-                    {analysis ? "Gemini 2.5 Pro" : "Live"}
+                    {analysisMeta.cached
+                      ? "Cached"
+                      : analysisMeta.usedGemini
+                      ? "Gemini 2.5 Pro"
+                      : analysis
+                      ? "Local Rules"
+                      : "Live"}
                   </span>
                 )}
               </div>
@@ -636,7 +723,9 @@ export default function CompleteDashboard() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h2 className="ivy-font text-xl font-black text-foreground">Personalised Recommendations</h2>
-              <p className="ivy-font text-sm text-muted-foreground">Curated for your profile · {analysis ? "Powered by Gemini" : "Updated today"}</p>
+              <p className="ivy-font text-sm text-muted-foreground">
+                Curated for your profile · {analysisMeta.usedGemini ? "Powered by Gemini" : analysisMeta.cached ? "Loaded from cache" : "Updated today"}
+              </p>
             </div>
             {analyzing && (
               <span className="flex items-center gap-1.5 rounded-full bg-violet-500/10 px-3 py-1 text-xs font-bold text-violet-600 dark:text-violet-400 ring-1 ring-violet-500/20">
@@ -672,13 +761,25 @@ export default function CompleteDashboard() {
           initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.4 }}
         >
-          <JourneyPath
-            avatar={avatar}
-            avatarAccent={accent}
-            readinessScore={d.readinessScore}
-            data={journeyData}
-            dynamicSteps={ai.journeySteps}
-          />
+          {analyzing && !ai.journeySteps ? (
+            <Card className="border-border/40 bg-card/80 backdrop-blur-sm">
+              <CardContent className="flex min-h-[280px] flex-col items-center justify-center gap-3 p-8 text-center">
+                <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+                <p className="ivy-font text-base font-bold text-foreground">Preparing your personalised journey path</p>
+                <p className="ivy-font text-sm text-muted-foreground">
+                  Gemini is building guidance only for missing or incomplete fields.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <JourneyPath
+              avatar={avatar}
+              avatarAccent={accent}
+              readinessScore={d.readinessScore}
+              data={journeyData}
+              dynamicSteps={ai.journeySteps}
+            />
+          )}
         </motion.div>
 
         {/* ── AI University Recommendations (from Gemini web search) ── */}
