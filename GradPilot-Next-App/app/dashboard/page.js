@@ -165,8 +165,15 @@ export default function Dashboard() {
     setShowFillMethod(false);
   };
 
+  // Auto-redirect to the complete dashboard when all fields are filled
+  useEffect(() => {
+    if (kycStatus === 'completed' && counsellingProgress?.isComplete) {
+      router.replace('/dashboard/complete');
+    }
+  }, [kycStatus, counsellingProgress, router]);
+
   // ── Loading state ──
-  if (kycStatus === 'loading') {
+  if (kycStatus === 'loading' || (kycStatus === 'completed' && counsellingProgress?.isComplete)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-3">
@@ -205,6 +212,18 @@ export default function Dashboard() {
                 progress={counsellingProgress}
                 onResumeCall={handleResumeCall}
               />
+            )}
+
+            {counsellingProgress?.isComplete && (
+              <div className="flex justify-center pt-2">
+                <Button
+                  onClick={() => router.push('/dashboard/complete')}
+                  className="h-14 bg-linear-to-r from-emerald-500 to-teal-500 px-10 text-lg font-bold text-white shadow-xl shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:from-emerald-600 hover:to-teal-600"
+                >
+                  <Sparkles className="mr-2.5 h-5 w-5" />
+                  Proceed to Dashboard
+                </Button>
+              </div>
             )}
           </div>
         </div>
