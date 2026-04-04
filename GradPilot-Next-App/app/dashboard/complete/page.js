@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
@@ -21,11 +20,6 @@ import {
 } from "lucide-react";
 import JourneyPath from "@/components/JourneyPath";
 import { getCounsellingFieldValue } from "@/lib/counselling-profile";
-
-const ElevenLabsVoiceAgent = dynamic(
-  () => import("@/components/ElevenLabsVoiceAgent"),
-  { ssr: false }
-);
 
 const PIE_COLORS = ["#10b981", "#0ea5e9", "#8b5cf6", "#f59e0b", "#ef4444", "#ec4899"];
 
@@ -227,9 +221,6 @@ export default function CompleteDashboard() {
     missingFields: [],
   });
 
-  // Voice agent state
-  const [showVoice, setShowVoice] = useState(false);
-
   useEffect(() => {
     setMounted(true);
     try {
@@ -294,20 +285,6 @@ export default function CompleteDashboard() {
     }
     fetchProfile();
   }, [router, fetchAnalysis]);
-
-  // After voice conversation, re-fetch profile and re-analyze
-  const handleVoiceComplete = useCallback(async () => {
-    setShowVoice(false);
-    try {
-      const res = await fetch("/api/kyc", { cache: "no-store" });
-      if (res.ok) {
-        const data = await res.json();
-        const p = data.studentProfile || {};
-        setProfile(p);
-        fetchAnalysis(p);
-      }
-    } catch {}
-  }, [fetchAnalysis]);
 
   if (loading || !profile) {
     return (
@@ -839,7 +816,7 @@ export default function CompleteDashboard() {
           transition={{ duration: 0.5, delay: 0.45 }}
           className="grid grid-cols-1 gap-5 lg:grid-cols-2"
         >
-          {/* ElevenLabs Voice Agent */}
+          {/* LiveAvatar Voice Counsellor */}
           <Card className="border-border/40 bg-linear-to-b from-cyan-50/60 to-card/90 dark:from-cyan-950/20 dark:to-card/90 backdrop-blur-sm">
             <CardContent className="p-7">
               <div className="mb-4 flex items-center justify-between">
@@ -847,33 +824,35 @@ export default function CompleteDashboard() {
                   <Mic className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
                   <span className="text-sm font-bold text-muted-foreground">AI Voice Counsellor</span>
                 </div>
-                {!showVoice && (
+                <div className="flex items-center gap-2">
                   <Button
                     size="sm"
-                    onClick={() => setShowVoice(true)}
+                    variant="outline"
+                    onClick={() => router.push("/dashboard/counsellor/logs")}
+                    className="h-8 text-xs font-semibold"
+                  >
+                    View Logs
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => router.push("/dashboard/complete/counsellor-session")}
                     className="h-8 gap-1.5 bg-cyan-500 text-white hover:bg-cyan-600 text-xs font-bold"
                   >
                     <Play className="h-3 w-3" /> Start Session
                   </Button>
-                )}
+                </div>
               </div>
-              {showVoice ? (
-                <div className="min-h-[280px]">
-                  <ElevenLabsVoiceAgent mode="buddy" onComplete={handleVoiceComplete} />
+              <div className="flex flex-col items-center gap-5 py-6">
+                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-cyan-500/15">
+                  <Mic className="h-9 w-9 text-cyan-500" />
                 </div>
-              ) : (
-                <div className="flex flex-col items-center gap-5 py-6">
-                  <div className="flex h-20 w-20 items-center justify-center rounded-full bg-cyan-500/15">
-                    <Mic className="h-9 w-9 text-cyan-500" />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-bold text-foreground">Talk to your AI Counsellor</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Ask questions about universities, visa, scholarships — the dashboard updates after each conversation.
-                    </p>
-                  </div>
+                <div className="text-center">
+                  <p className="text-sm font-bold text-foreground">Talk to your AI Counsellor</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Start a full-screen counsellor session. Conversation events are stored for review and decision-making.
+                  </p>
                 </div>
-              )}
+              </div>
             </CardContent>
           </Card>
 
