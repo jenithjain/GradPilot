@@ -1,10 +1,10 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { AvatarPicker } from "@/components/ui/avatar-picker";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Target,
@@ -17,26 +17,28 @@ import {
 } from "lucide-react";
 
 const AVATARS = [
-  { id: 1, name: "Hulk", src: "/avatars/hulk.png", accent: "from-lime-400 to-emerald-500", desc: "Bold and unstoppable" },
-  { id: 2, name: "Iron Man", src: "/avatars/ironman.png", accent: "from-amber-400 to-orange-500", desc: "Sharp and visionary" },
-  { id: 3, name: "Thor", src: "/avatars/thor.png", accent: "from-sky-400 to-blue-500", desc: "Calm power and focus" },
-  { id: 4, name: "Spider-Man", src: "/avatars/spiderman.png", accent: "from-blue-500 to-indigo-600", desc: "Fast, agile, and driven" },
+  { id: 1, name: "Hulk",       src: "/avatars/hulk.png",       accent: "from-lime-400 to-emerald-500",  ringColor: "ring-emerald-500", desc: "Bold and unstoppable" },
+  { id: 2, name: "Iron Man",   src: "/avatars/ironman.png",    accent: "from-amber-400 to-orange-500",  ringColor: "ring-orange-500",  desc: "Sharp and visionary" },
+  { id: 3, name: "Thor",       src: "/avatars/thor.png",       accent: "from-sky-400 to-blue-500",     ringColor: "ring-sky-500",     desc: "Calm power and focus" },
+  { id: 4, name: "Spider-Man", src: "/avatars/spiderman.png", accent: "from-blue-500 to-indigo-600",  ringColor: "ring-indigo-500",  desc: "Fast, agile, and driven" },
 ];
 
 export default function Dashboard() {
   const router = useRouter();
   const [showJourneyModal, setShowJourneyModal] = useState(false);
-  const [selectedAvatar, setSelectedAvatar] = useState(null);
+  const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
   const [showFillMethod, setShowFillMethod] = useState(false);
-
   const handleAvatarSelect = (avatar) => {
     setSelectedAvatar(avatar);
+  };
+
+  const handleConfirmAvatar = () => {
     setShowFillMethod(true);
   };
 
   const closeJourneyFlow = () => {
     setShowJourneyModal(false);
-    setSelectedAvatar(null);
+    setSelectedAvatar(AVATARS[0]);
     setShowFillMethod(false);
   };
 
@@ -52,8 +54,7 @@ export default function Dashboard() {
               AI-powered student lead qualification and counselling analytics
             </p>
           </div>
-          <div className="flex items-center gap-3">
-          </div>
+
         </div>
 
         <Card className="relative overflow-hidden border-border/40 bg-card/50 backdrop-blur-sm">
@@ -107,43 +108,29 @@ export default function Dashboard() {
 
         {showJourneyModal && !showFillMethod && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-            <div className="relative w-full max-w-6xl rounded-3xl border border-border/50 bg-card p-8 shadow-2xl sm:p-10">
+            <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-border/50 bg-card shadow-2xl">
               <button
                 type="button"
                 onClick={closeJourneyFlow}
-                className="absolute right-4 top-4 text-muted-foreground transition-colors hover:text-foreground"
+                className="absolute right-4 top-4 z-10 text-muted-foreground transition-colors hover:text-foreground"
               >
                 <X className="h-5 w-5" />
               </button>
-              <div className="mb-10 text-center">
-                <h2 className="ivy-font text-3xl font-bold text-foreground sm:text-4xl">Choose Your Avatar</h2>
-                <p className="ivy-font mt-1 text-sm text-muted-foreground">
-                  Pick the persona that best describes you
-                </p>
-              </div>
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
-                {AVATARS.map((avatar) => (
-                  <button
-                    key={avatar.id}
-                    type="button"
-                    onClick={() => handleAvatarSelect(avatar)}
-                    className="group flex cursor-pointer flex-col items-center gap-5 rounded-2xl border border-border/50 bg-muted/30 p-6 transition-all duration-200 hover:scale-[1.03] hover:border-emerald-500/50 hover:bg-muted/60"
-                  >
-                    <div className={`flex h-56 w-full items-center justify-center rounded-2xl bg-linear-to-br ${avatar.accent} p-4 shadow-lg shadow-black/20 sm:h-64`}>
-                      <Image
-                        src={avatar.src}
-                        alt={avatar.name}
-                        width={240}
-                        height={240}
-                        className="h-full w-full object-contain drop-shadow-[0_10px_24px_rgba(0,0,0,0.35)]"
-                      />
-                    </div>
-                    <div className="text-center">
-                      <p className="ivy-font text-lg font-semibold text-foreground">{avatar.name}</p>
-                      <p className="ivy-font text-sm text-muted-foreground">{avatar.desc}</p>
-                    </div>
-                  </button>
-                ))}
+
+              <AvatarPicker
+                avatars={AVATARS}
+                selectedId={selectedAvatar?.id}
+                onSelect={handleAvatarSelect}
+              />
+
+              <div className="px-8 pb-8">
+                <button
+                  type="button"
+                  onClick={handleConfirmAvatar}
+                  className="ivy-font w-full rounded-2xl bg-linear-to-r from-emerald-500 to-teal-500 py-3.5 text-base font-bold text-white shadow-lg shadow-emerald-500/30 transition-all duration-200 hover:scale-[1.02] hover:from-emerald-600 hover:to-teal-600"
+                >
+                  Continue with {selectedAvatar?.name}
+                </button>
               </div>
             </div>
           </div>
@@ -229,6 +216,7 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
       </div>
     </div>
   );

@@ -1,0 +1,794 @@
+﻿"use client";
+
+import { useEffect, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
+import Image from "next/image";
+import { gsap } from "gsap";
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid,
+} from "recharts";
+import { Button } from "@/components/ui/button";
+import {
+  X, Brain, TrendingUp, Calendar, Mic,
+  ChevronRight, Play, RotateCcw, Settings,
+  GraduationCap, Star, BookOpen, Award, Activity,
+} from "lucide-react";
+import JourneyPath from "@/components/JourneyPath";
+
+const PROGRESS_DATA = [
+  { month: "Oct", score: 22 },
+  { month: "Nov", score: 34 },
+  { month: "Dec", score: 41 },
+  { month: "Jan", score: 53 },
+  { month: "Feb", score: 62 },
+  { month: "Mar", score: 73 },
+  { month: "Apr", score: 81 },
+];
+
+const SESSIONS = [
+  { date: "Apr 8",  time: "3:00 PM", topic: "University Selection Strategy", color: "bg-cyan-400",   glow: "shadow-cyan-400/60",   status: "upcoming"  },
+  { date: "Apr 15", time: "4:30 PM", topic: "SOP & LOR Guidance",            color: "bg-violet-400", glow: "shadow-violet-400/60", status: "scheduled" },
+  { date: "Apr 22", time: "2:00 PM", topic: "Visa Application Workshop",      color: "bg-indigo-400", glow: "shadow-indigo-400/60", status: "scheduled" },
+];
+
+const AI_RESPONSES = [
+  "Your profile shows strong potential for UK Tier 1 unis. IELTS Band 7 is your primary unlock -- it adds 12 more options instantly.",
+  "Academic background is solid. Channel that into a compelling SOP -- focus on your career trajectory, not just grades.",
+  "I've found 3 scholarships you have a high chance of qualifying for. Want me to walk you through each one?",
+];
+
+const AVATAR_ACCENTS = {
+  hulk:      "from-lime-400 to-emerald-500",
+  ironman:   "from-amber-400 to-orange-500",
+  thor:      "from-sky-400 to-blue-500",
+  spiderman: "from-blue-500 to-indigo-600",
+};
+
+// Radial progress ring
+function RadialScore({ value, label, color, delay = 0 }) {
+  const circleRef = useRef(null);
+  const r = 36;
+  const circ = 2 * Math.PI * r;
+  const target = circ - (value / 100) * circ;
+
+  useEffect(() => {
+    if (!circleRef.current) return;
+    gsap.fromTo(
+      circleRef.current,
+      { strokeDashoffset: circ },
+      { strokeDashoffset: target, duration: 1.5, ease: "power3.out", delay },
+    );
+  }, [circ, target, delay]);
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative h-24 w-24">
+        <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 88 88">
+          <circle cx="44" cy="44" r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="8" />
+          <circle
+            ref={circleRef}
+            cx="44" cy="44" r={r} fill="none"
+            stroke={color} strokeWidth="8" strokeLinecap="round"
+            strokeDasharray={circ} strokeDashoffset={circ}
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-2xl font-black text-white">{value}</span>
+        </div>
+      </div>
+      <span className="text-xs font-medium text-white/40">{label}</span>
+    </div>
+  );
+}
+
+// Animated waveform
+function Waveform({ active }) {
+  const barsRef = useRef([]);
+
+  useEffect(() => {
+    const bars = barsRef.current.filter(Boolean);
+    if (!bars.length) return;
+    const tweens = bars.map((bar, i) => {
+      if (!active) {
+        return gsap.to(bar, { scaleY: 0.15, duration: 0.35, ease: "power2.out" });
+      }
+      const dur = 0.25 + (i % 4) * 0.08;
+      const peak = 0.7 + (i % 5) * 0.22;
+      return gsap.to(bar, {
+        scaleY: peak, duration: dur,
+        ease: "sine.inOut", yoyo: true, repeat: -1, delay: i * 0.055,
+      });
+    });
+    return () => tweens.forEach((t) => t?.kill());
+  }, [active]);
+
+  return (
+    <div className="flex h-10 items-center justify-center gap-1">
+      {Array.from({ length: 14 }).map((_, i) => (
+        <div
+          key={i}
+          ref={(el) => { barsRef.current[i] = el; }}
+          style={{
+            width: 3, height: "100%", borderRadius: 99, transformOrigin: "center",
+            transform: "scaleY(0.15)",
+            backgroundColor: active ? `hsl(${185 + i * 8}, 85%, 65%)` : "rgba(255,255,255,0.18)",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+export default function AICounsellingDashboard({ onClose, avatar, data }) {
+  const overlayRef  = useRef(null);
+  const contentRef  = useRef(null);  // content fade — background stays solid
+  const aiCardRef   = useRef(null);
+  const cardRefs    = useRef([]);
+  const [mounted,     setMounted]     = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [aiThinking,  setAiThinking]  = useState(false);
+  const [aiResponse,  setAiResponse]  = useState("");
+  const [responseIdx, setResponseIdx] = useState(0);
+
+  const avatarAccent = avatar ? (AVATAR_ACCENTS[avatar.id] || "from-violet-500 to-indigo-600") : "from-violet-500 to-indigo-600";
+
+  // Derive from form data
+  const readinessScore = (() => {
+    if (!data) return 65;
+    let s = 0;
+    if (data.educationLevel) s += 20;
+    if (data.gpa)            s += 15;
+    if (data.testStatus === "Taken")      s += 25;
+    else if (data.testStatus === "Preparing") s += 12;
+    if (data.budget)               s += 15;
+    if (data.targetCountry?.length) s += 10;
+    if (data.intakeYear)           s += 15;
+    return Math.min(s, 100);
+  })();
+
+  const primaryCountry = data?.targetCountry?.[0] || "UK";
+  const needsTest      = !data?.testStatus || data.testStatus === "Not Taken" || data.testStatus === "Preparing";
+  const matchCount     = Math.min((data?.targetCountry?.length || 1) * 4, 20);
+  const avgFit         = `${Math.min(readinessScore + 4, 95)}%`;
+  const urgentCount    = [needsTest, !data?.gpa, !data?.intakeYear].filter(Boolean).length || 1;
+  const displayName    = data?.fullName || "Student";
+  const displayCourse  = data?.courseInterest || data?.fieldOfStudy || "Your Course";
+  const intakeLabel    = data?.intakeMonth && data?.intakeYear ? `${data.intakeMonth} ${data.intakeYear}` : "Sep 2026";
+
+  const profileTags = [
+    `${primaryCountry} Target`,
+    intakeLabel,
+    data?.testStatus === "Taken" ? "Test Complete" : data?.testStatus === "Preparing" ? "Test Prep" : "Test Pending",
+  ];
+
+  const aiInsightBody = needsTest
+    ? `Language test (IELTS/TOEFL) is your primary gap. Clearing Band 7 unlocks ${matchCount}+ additional options for ${displayCourse}.`
+    : readinessScore >= 75
+    ? `Profile aligned for ${displayCourse} in ${primaryCountry}. Focus on strengthening your SOP and securing strong reference letters.`
+    : `Core profile is developing. Finalise your intake year and institution preferences to sharpen your shortlist.`;
+
+  const topPickLabel = data?.testStatus === "Taken"
+    ? `Strong shortlist candidate for ${primaryCountry} universities`
+    : `IELTS clearance will unlock top universities in ${primaryCountry}`;
+
+  const recommendations = [
+    {
+      id: 1, icon: GraduationCap, iconCls: "text-blue-300", iconBg: "bg-blue-500/15",
+      title: `Top University in ${primaryCountry}`,
+      tag: `${Math.min(readinessScore + 7, 97)}% Match`, tagClass: "bg-blue-500/20 text-blue-300",
+      desc: `${displayCourse} -- ${intakeLabel} intake`,
+      cta: "View Details",
+      cardStyle: {
+        background: "linear-gradient(135deg, rgba(30,58,138,0.32) 0%, rgba(49,46,129,0.28) 100%)",
+        border: "1px solid rgba(59,130,246,0.28)",
+      },
+    },
+    {
+      id: 2, icon: BookOpen,
+      iconCls: needsTest ? "text-rose-300"    : "text-emerald-300",
+      iconBg:  needsTest ? "bg-rose-500/15"   : "bg-emerald-500/15",
+      title:   needsTest ? "Language Test Preparation" : "Application Documents",
+      tag:     needsTest ? "Urgent"           : "Next Step",
+      tagClass: needsTest ? "bg-rose-500/20 text-rose-300" : "bg-emerald-500/20 text-emerald-300",
+      desc: needsTest
+        ? `Band 7.0 target -- required for ${primaryCountry} universities`
+        : (data?.testScore ? `Score: ${data.testScore} -- SOP & LOR next` : "SOP & recommendation letters"),
+      cta: needsTest ? "Start Prep" : "Begin Writing",
+      cardStyle: needsTest
+        ? { background: "linear-gradient(135deg, rgba(136,19,55,0.30) 0%, rgba(159,18,57,0.24) 100%)", border: "1px solid rgba(244,63,94,0.28)" }
+        : { background: "linear-gradient(135deg, rgba(5,78,59,0.30) 0%, rgba(6,55,40,0.24) 100%)",    border: "1px solid rgba(16,185,129,0.28)" },
+    },
+    {
+      id: 3, icon: Award, iconCls: "text-amber-300", iconBg: "bg-amber-500/15",
+      title: "Scholarship Opportunities",
+      tag: data?.scholarshipInterest === "Yes" ? "Eligible" : "Explore",
+      tagClass: "bg-amber-500/20 text-amber-300",
+      desc: data?.scholarshipInterest === "Yes"
+        ? `Merit-based funding in ${primaryCountry} -- you qualify`
+        : `Financial aid options for ${primaryCountry} study`,
+      cta: "Apply Now",
+      cardStyle: {
+        background: "linear-gradient(135deg, rgba(120,53,15,0.30) 0%, rgba(146,64,14,0.24) 100%)",
+        border: "1px solid rgba(245,158,11,0.28)",
+      },
+    },
+  ];
+
+  // Portal mount guard (SSR safety) — deferred to avoid React compiler cascading render warning
+  useEffect(() => {
+    const id = setTimeout(() => setMounted(true), 0);
+    return () => clearTimeout(id);
+  }, []);
+
+  // Scroll lock
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Content fade-in — background layer stays solid at all times (fixes light-mode bleed)
+  useEffect(() => {
+    if (!contentRef.current) return;
+    gsap.fromTo(contentRef.current,
+      { opacity: 0 },
+      { opacity: 1, duration: 0.45, ease: "power2.out" },
+    );
+  }, [mounted]);
+
+  // Stagger cards
+  useEffect(() => {
+    const cards = cardRefs.current.filter(Boolean);
+    if (!cards.length) return;
+    gsap.fromTo(cards,
+      { y: 36, opacity: 0 },
+      { y: 0, opacity: 1, duration: 0.6, stagger: 0.08, ease: "power3.out", delay: 0.35 },
+    );
+  }, [mounted]);
+
+  // AI card continuous glow
+  useEffect(() => {
+    if (!aiCardRef.current) return;
+    const tl = gsap.timeline({ repeat: -1, yoyo: true });
+    tl.to(aiCardRef.current, {
+      boxShadow: "0 0 0 1px rgba(139,92,246,0.60), 0 0 50px rgba(139,92,246,0.28), 0 0 90px rgba(139,92,246,0.10)",
+      duration: 2, ease: "power2.inOut",
+    }).to(aiCardRef.current, {
+      boxShadow: "0 0 0 1px rgba(109,40,217,0.30), 0 0 20px rgba(109,40,217,0.12), 0 0 40px rgba(109,40,217,0.05)",
+      duration: 2, ease: "power2.inOut",
+    });
+    return () => tl.kill();
+  }, [mounted]);
+
+  const handleMic = useCallback(() => {
+    if (isListening) {
+      setIsListening(false);
+      setAiThinking(true);
+      setAiResponse("");
+      setTimeout(() => {
+        setAiThinking(false);
+        setAiResponse(AI_RESPONSES[responseIdx % AI_RESPONSES.length]);
+        setResponseIdx((n) => n + 1);
+      }, 1800);
+    } else {
+      setIsListening(true);
+      setAiResponse("");
+    }
+  }, [isListening, responseIdx]);
+
+  const handleClose = useCallback(() => {
+    gsap.to(contentRef.current, {
+      opacity: 0, duration: 0.3, ease: "power2.in",
+      onComplete: onClose,
+    });
+  }, [onClose]);
+
+  const ref = (i) => (el) => { cardRefs.current[i] = el; };
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      ref={overlayRef}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 9999,
+        isolation: "isolate",
+        display: "flex",
+        flexDirection: "column",
+        backgroundColor: "#030711",  // solid base — prevents light-mode page bleed at all times
+      }}
+    >
+      {/* Rich layered gradient background -- always fully opaque */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "linear-gradient(135deg, #030711 0%, #070b1e 35%, #0e0924 65%, #040810 100%)",
+        }}
+      >
+        {/* Violet orb top-left */}
+        <div style={{ position: "absolute", left: "-160px", top: "-160px", width: "700px", height: "700px", borderRadius: "50%", background: "radial-gradient(circle, rgba(124,58,237,0.38) 0%, transparent 65%)" }} />
+        {/* Cyan orb bottom-right */}
+        <div style={{ position: "absolute", right: "-160px", bottom: "-160px", width: "600px", height: "600px", borderRadius: "50%", background: "radial-gradient(circle, rgba(6,182,212,0.24) 0%, transparent 65%)" }} />
+        {/* Indigo center */}
+        <div style={{ position: "absolute", left: "50%", top: "40%", transform: "translate(-50%,-50%)", width: "500px", height: "500px", borderRadius: "50%", background: "radial-gradient(circle, rgba(99,102,241,0.14) 0%, transparent 70%)" }} />
+        {/* Subtle grid */}
+        <div style={{ position: "absolute", inset: 0, opacity: 0.025, backgroundImage: "linear-gradient(rgba(255,255,255,0.6) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.6) 1px,transparent 1px)", backgroundSize: "52px 52px" }} />
+      </div>
+
+      {/* Scrollable pane -- fills remaining height */}
+      <div ref={contentRef} className="no-scrollbar" style={{ position: "relative", flex: 1, overflowY: "auto", scrollBehavior: "smooth" }}>
+
+        {/* Sticky top bar */}
+        <div style={{ position: "sticky", top: 0, zIndex: 10, borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(3,7,17,0.90)", backdropFilter: "blur(20px)" }}>
+          <div className="flex items-center justify-between px-5 py-4 sm:px-8 lg:px-14">
+            <div className="flex items-center gap-3">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
+              </span>
+              <span className="text-sm font-semibold uppercase tracking-widest text-white/55">
+                GradPilot &middot; AI Counselling
+              </span>
+            </div>
+            <div className="flex items-center gap-4">
+              {avatar && (
+                <div className="hidden items-center gap-2.5 sm:flex">
+                  <div className={`flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-linear-to-br ${avatarAccent} ring-1 ring-white/15`}>
+                    <Image src={avatar.src} alt={avatar.name} width={28} height={28} className="h-full w-full object-contain" />
+                  </div>
+                  <span className="text-sm font-medium text-white/45">{displayName}</span>
+                </div>
+              )}
+              <button
+                onClick={handleClose}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-white/35 transition-all hover:text-white"
+                style={{ background: "rgba(255,255,255,0.06)" }}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="w-full space-y-6 px-5 py-8 sm:px-8 lg:px-14">
+
+          {/* Profile hero strip */}
+          <div
+            ref={ref(0)}
+            className="relative overflow-hidden rounded-2xl"
+            style={{
+              background: "linear-gradient(135deg, rgba(15,18,52,0.96) 0%, rgba(22,12,50,0.92) 50%, rgba(12,16,44,0.96) 100%)",
+              border: "1px solid rgba(139,92,246,0.22)",
+            }}
+          >
+            <div className={`absolute inset-0 bg-linear-to-r ${avatarAccent} opacity-[0.08]`} />
+            <div style={{ position: "absolute", right: "-80px", top: "-80px", width: "300px", height: "300px", borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.28) 0%, transparent 70%)" }} />
+            <div style={{ position: "absolute", left: "-60px", bottom: "-60px", width: "250px", height: "250px", borderRadius: "50%", background: "radial-gradient(circle, rgba(99,102,241,0.18) 0%, transparent 70%)" }} />
+
+            <div className="relative p-7 lg:p-10">
+              <div className="flex flex-col gap-8 lg:flex-row lg:items-center">
+
+                {/* Avatar + identity */}
+                <div className="flex items-center gap-5">
+                  {avatar ? (
+                    <div className={`flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br ${avatarAccent}`}
+                      style={{ boxShadow: "0 0 32px rgba(139,92,246,0.40), 0 8px 24px rgba(0,0,0,0.40)", ring: "2px solid rgba(255,255,255,0.12)" }}>
+                      <Image src={avatar.src} alt={avatar.name} width={76} height={76} className="h-full w-full object-contain drop-shadow-md" />
+                    </div>
+                  ) : (
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl" style={{ background: "linear-gradient(135deg, #7c3aed, #4f46e5)", boxShadow: "0 0 28px rgba(124,58,237,0.40)" }}>
+                      <GraduationCap className="h-8 w-8 text-white" />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-white/25">Student Profile</p>
+                    <h2 className="mt-1 text-2xl font-black text-white lg:text-3xl">{displayName}</h2>
+                    <p className="mt-1 text-sm text-white/40">{displayCourse}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {profileTags.map((t) => (
+                        <span key={t} className="rounded-full px-3 py-0.5 text-xs font-semibold text-violet-300"
+                          style={{ background: "rgba(139,92,246,0.18)", border: "1px solid rgba(139,92,246,0.28)" }}>
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="hidden h-20 w-px shrink-0 lg:block" style={{ background: "rgba(255,255,255,0.07)" }} />
+
+                {/* Key metrics */}
+                <div className="flex flex-1 flex-wrap gap-x-10 gap-y-5">
+                  {[
+                    ["Status",    data?.applicationTimeline || "In Progress", "#fbbf24"],
+                    ["Readiness", `${readinessScore} / 100`,                  "#34d399"],
+                    ["Budget",    data?.budget || "--",                       "#22d3ee"],
+                    ["Intake",    intakeLabel,                                 "#a78bfa"],
+                  ].map(([k, v, c]) => (
+                    <div key={k} className="flex flex-col">
+                      <span className="text-[11px] font-bold uppercase tracking-widest text-white/25">{k}</span>
+                      <span className="mt-1 text-lg font-black leading-none" style={{ color: c }}>{v}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="hidden h-20 w-px shrink-0 lg:block" style={{ background: "rgba(255,255,255,0.07)" }} />
+
+                {/* Readiness ring */}
+                <div className="flex shrink-0 flex-col items-center gap-2">
+                  <div className="relative flex h-24 w-24 items-center justify-center">
+                    <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 88 88">
+                      <circle cx="44" cy="44" r="36" fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="7" />
+                      <circle
+                        cx="44" cy="44" r="36" fill="none"
+                        stroke={readinessScore >= 75 ? "#10b981" : readinessScore >= 50 ? "#f59e0b" : "#ef4444"}
+                        strokeWidth="7" strokeLinecap="round"
+                        strokeDasharray={`${2 * Math.PI * 36}`}
+                        strokeDashoffset={`${2 * Math.PI * 36 * (1 - readinessScore / 100)}`}
+                      />
+                    </svg>
+                    <div className="text-center">
+                      <span className="text-2xl font-black text-white">{readinessScore}</span>
+                      <span className="block text-[10px] text-white/30">/100</span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/25">Readiness</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* AI Insight (2/3) + Wellbeing (1/3) */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+
+            {/* AI Insight */}
+            <div
+              ref={(el) => { cardRefs.current[1] = el; aiCardRef.current = el; }}
+              className="relative overflow-hidden rounded-2xl p-7 lg:col-span-2"
+              style={{
+                background: "linear-gradient(135deg, rgba(88,28,135,0.32) 0%, rgba(67,20,120,0.26) 50%, rgba(30,27,75,0.32) 100%)",
+                border: "1px solid rgba(139,92,246,0.28)",
+              }}
+            >
+              <div style={{ position: "absolute", right: "-60px", top: "-60px", width: "250px", height: "250px", borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.38) 0%, transparent 70%)" }} />
+              <div style={{ position: "absolute", left: "-60px", bottom: "-60px", width: "220px", height: "220px", borderRadius: "50%", background: "radial-gradient(circle, rgba(99,102,241,0.28) 0%, transparent 70%)" }} />
+
+              <div className="relative">
+                <div className="mb-5 flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: "rgba(139,92,246,0.25)" }}>
+                    <Brain className="h-5 w-5 text-violet-300" />
+                  </div>
+                  <span className="text-sm font-bold text-violet-200">AI Insight</span>
+                  <span className="ml-auto rounded-full px-2.5 py-0.5 text-xs font-semibold text-violet-300" style={{ background: "rgba(139,92,246,0.22)", border: "1px solid rgba(139,92,246,0.35)" }}>
+                    Live
+                  </span>
+                </div>
+
+                <h3 className="text-xl font-black leading-snug text-white lg:text-2xl">
+                  {readinessScore >= 75
+                    ? (<>Your profile shows <span style={{ background: "linear-gradient(90deg, #c4b5fd, #818cf8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>strong potential</span> for {primaryCountry} universities.</>)
+                    : needsTest
+                    ? (<>Your core profile is solid. <span style={{ background: "linear-gradient(90deg, #fca5a5, #f472b6)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Language test</span> is your primary gap.</>)
+                    : (<>Your profile is <span style={{ background: "linear-gradient(90deg, #fcd34d, #fb923c)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>on track</span>. Build your shortlist and application documents.</>)
+                  }
+                </h3>
+                <p className="mt-3 text-sm leading-relaxed text-white/45">{aiInsightBody}</p>
+
+                <div className="mt-6 grid grid-cols-3 gap-4">
+                  {[
+                    [`${matchCount}`, "Matches", "#818cf8"],
+                    [avgFit,          "Avg Fit",  "#34d399"],
+                    [`${urgentCount}`,"Urgent",   "#fb923c"],
+                  ].map(([n, l, c]) => (
+                    <div key={l} className="rounded-xl py-4 text-center"
+                      style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.09)" }}>
+                      <p className="text-3xl font-black" style={{ color: c }}>{n}</p>
+                      <p className="mt-0.5 text-xs text-white/30">{l}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-5 flex items-center gap-2 rounded-xl px-4 py-3"
+                  style={{ background: "rgba(139,92,246,0.16)", border: "1px solid rgba(139,92,246,0.22)" }}>
+                  <Star className="h-3.5 w-3.5 text-violet-300" />
+                  <span className="text-xs text-violet-300">{topPickLabel}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Wellbeing */}
+            <div
+              ref={ref(2)}
+              className="rounded-2xl p-6"
+              style={{
+                background: "linear-gradient(135deg, rgba(5,78,59,0.30) 0%, rgba(6,46,36,0.24) 50%, rgba(7,28,58,0.30) 100%)",
+                border: "1px solid rgba(16,185,129,0.24)",
+              }}
+            >
+              <div className="mb-5 flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ background: "rgba(16,185,129,0.22)" }}>
+                  <Activity className="h-5 w-5 text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-white/70">Wellbeing Scores</p>
+                  <p className="text-xs font-medium uppercase tracking-widest text-white/25">AI-assessed today</p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-around py-2">
+                <RadialScore value={72} label="Focus"      color="#60a5fa" delay={0.55} />
+                <RadialScore value={58} label="Confidence" color="#a78bfa" delay={0.70} />
+                <RadialScore value={44} label="Stress"     color="#34d399" delay={0.85} />
+              </div>
+
+              <div className="mt-5 rounded-xl px-4 py-3"
+                style={{ background: "rgba(16,185,129,0.10)", border: "1px solid rgba(16,185,129,0.14)" }}>
+                <p className="text-xs text-white/30">AI Assessment</p>
+                <p className="mt-1.5 text-sm leading-relaxed text-white/55">
+                  Focus is high -- ideal for tackling complex applications. Stress is manageable; maintain your momentum.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Recommendations */}
+          <div ref={ref(3)}>
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black text-white">Personalised Recommendations</h2>
+                <p className="text-sm text-white/35">Curated for your profile &middot; Updated today</p>
+              </div>
+              <span className="rounded-full px-3 py-1 text-xs font-bold text-emerald-400"
+                style={{ background: "rgba(16,185,129,0.14)", border: "1px solid rgba(16,185,129,0.24)" }}>
+                3 New
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {recommendations.map((rec) => (
+                <div
+                  key={rec.id}
+                  className="group relative cursor-pointer overflow-hidden rounded-2xl p-6 transition-all duration-300 hover:scale-[1.02] hover:brightness-110"
+                  style={rec.cardStyle}
+                >
+                  <div className="mb-4 flex items-start justify-between">
+                    <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${rec.iconBg}`}>
+                      <rec.icon className={`h-5 w-5 ${rec.iconCls}`} />
+                    </div>
+                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${rec.tagClass}`}>{rec.tag}</span>
+                  </div>
+                  <h3 className="text-base font-black text-white">{rec.title}</h3>
+                  <p className="mt-1.5 text-sm text-white/45">{rec.desc}</p>
+                  <button className="mt-5 flex items-center gap-1 text-sm font-bold text-white/50 transition-colors group-hover:text-white">
+                    {rec.cta}
+                    <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Journey Path */}
+          <JourneyPath
+            avatar={avatar}
+            avatarAccent={avatarAccent}
+            readinessScore={readinessScore}
+            data={data}
+          />
+
+          {/* Voice + Follow-Up */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+
+            {/* Voice */}
+            <div
+              ref={ref(4)}
+              className="rounded-2xl p-7"
+              style={{
+                background: "linear-gradient(180deg, rgba(6,182,212,0.12) 0%, rgba(15,23,42,0.72) 100%)",
+                border: "1px solid rgba(6,182,212,0.18)",
+              }}
+            >
+              <div className="mb-6 flex items-center gap-2">
+                <Mic className="h-4 w-4 text-cyan-400" />
+                <span className="text-sm font-bold text-white/60">Voice Interaction</span>
+              </div>
+
+              <div className="flex flex-col items-center gap-6 py-2">
+                <div className="relative flex items-center justify-center">
+                  {isListening && (
+                    <>
+                      <span className="absolute h-28 w-28 animate-ping rounded-full bg-cyan-500/15 duration-700" />
+                      <span className="absolute h-20 w-20 animate-ping rounded-full bg-cyan-500/20" style={{ animationDelay: "0.25s" }} />
+                    </>
+                  )}
+                  <button
+                    onClick={handleMic}
+                    className={`relative z-10 flex h-[72px] w-[72px] items-center justify-center rounded-full transition-all duration-300 ${isListening ? "scale-110" : "hover:scale-105"}`}
+                    style={isListening
+                      ? { background: "#06b6d4", boxShadow: "0 0 36px rgba(6,182,212,0.70)" }
+                      : { background: "rgba(255,255,255,0.08)" }
+                    }
+                  >
+                    <Mic className={`h-7 w-7 ${isListening ? "text-white" : "text-white/45"}`} />
+                  </button>
+                </div>
+
+                <Waveform active={isListening} />
+
+                <div className="w-full min-h-[72px] rounded-xl px-5 py-4"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                  {aiThinking ? (
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-sm font-medium text-violet-300">AI Thinking</span>
+                      <div className="flex gap-1">
+                        {[0, 1, 2].map((i) => (
+                          <span key={i} className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                        ))}
+                      </div>
+                    </div>
+                  ) : aiResponse ? (
+                    <p className="text-sm leading-relaxed text-white/65">{aiResponse}</p>
+                  ) : (
+                    <p className="text-sm text-white/20">
+                      {isListening ? "Listening... speak your question" : "Tap the mic and ask your counsellor anything"}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Follow-up tracker */}
+            <div
+              ref={ref(5)}
+              className="rounded-2xl p-7"
+              style={{
+                background: "linear-gradient(180deg, rgba(99,102,241,0.14) 0%, rgba(15,23,42,0.72) 100%)",
+                border: "1px solid rgba(99,102,241,0.20)",
+              }}
+            >
+              <div className="mb-6 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-indigo-400" />
+                  <span className="text-sm font-bold text-white/60">Follow-Up Tracker</span>
+                </div>
+                <Button
+                  size="sm"
+                  className="h-8 text-indigo-300 text-xs font-semibold"
+                  style={{ background: "rgba(99,102,241,0.20)", border: "1px solid rgba(99,102,241,0.30)" }}
+                >
+                  Launch Follow-up
+                </Button>
+              </div>
+
+              <div className="space-y-3">
+                {SESSIONS.map((s, i) => (
+                  <div key={i} className="flex items-start gap-3 rounded-xl px-4 py-3.5 transition-colors"
+                    style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+                  >
+                    <div className="relative mt-1 flex flex-col items-center">
+                      <div className={`h-3 w-3 rounded-full ${s.color} shadow-[0_0_8px] ${s.glow}`} />
+                      {i < SESSIONS.length - 1 && <div className="mt-1.5 h-8 w-px" style={{ background: "rgba(255,255,255,0.08)" }} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-white">{s.topic}</p>
+                      <p className="mt-0.5 text-xs text-white/35">{s.date} &middot; {s.time}</p>
+                    </div>
+                    <span className={`mt-0.5 shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                      s.status === "upcoming"
+                        ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/20"
+                        : "bg-white/8 text-white/35"
+                    }`}>
+                      {s.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Progress graph */}
+          <div
+            ref={ref(6)}
+            className="rounded-2xl p-7"
+            style={{
+              background: "linear-gradient(180deg, rgba(20,10,50,0.65) 0%, rgba(7,10,25,0.82) 100%)",
+              border: "1px solid rgba(129,140,248,0.20)",
+            }}
+          >
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black text-white">Readiness Trend</h2>
+                <p className="text-sm text-white/35">Your improvement over the past 7 months</p>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5"
+                style={{ background: "rgba(16,185,129,0.13)", border: "1px solid rgba(16,185,129,0.24)" }}>
+                <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="text-xs font-bold text-emerald-400">+59 pts this period</span>
+              </div>
+            </div>
+
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart data={PROGRESS_DATA} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="aiDashAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor="#a78bfa" stopOpacity={0.55} />
+                    <stop offset="100%" stopColor="#818cf8" stopOpacity={0}    />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.30)", fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis domain={[0, 100]} tick={{ fill: "rgba(255,255,255,0.30)", fontSize: 12 }} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ background: "#0a0820", border: "1px solid rgba(139,92,246,0.40)", borderRadius: 12, fontSize: 13, color: "#fff" }}
+                  cursor={{ stroke: "rgba(167,139,250,0.30)", strokeWidth: 1 }}
+                  formatter={(v) => [`${v}`, "Readiness"]}
+                />
+                <Area
+                  dataKey="score" stroke="#a78bfa" strokeWidth={2.5}
+                  fill="url(#aiDashAreaGrad)"
+                  dot={{ fill: "#a78bfa", r: 4, strokeWidth: 0 }}
+                  activeDot={{ r: 6, fill: "#c4b5fd", strokeWidth: 0 }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Action Center */}
+          <div
+            ref={ref(7)}
+            className="rounded-2xl p-7"
+            style={{
+              background: "linear-gradient(180deg, rgba(15,10,35,0.68) 0%, rgba(7,10,22,0.82) 100%)",
+              border: "1px solid rgba(255,255,255,0.07)",
+            }}
+          >
+            <h2 className="mb-6 text-xl font-black text-white">Action Center</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {[
+                {
+                  icon: Play, label: "Start New Session", desc: "Begin a fresh AI counselling session",
+                  cardStyle: { background: "linear-gradient(135deg, rgba(37,99,235,0.24) 0%, rgba(67,56,202,0.24) 100%)", border: "1px solid rgba(59,130,246,0.30)" },
+                  text: "text-blue-300",
+                },
+                {
+                  icon: RotateCcw, label: "Retake Assessment", desc: "Get an updated readiness evaluation",
+                  cardStyle: { background: "linear-gradient(135deg, rgba(124,58,237,0.24) 0%, rgba(109,40,217,0.24) 100%)", border: "1px solid rgba(139,92,246,0.30)" },
+                  text: "text-violet-300",
+                },
+                {
+                  icon: Settings, label: "Update Info", desc: "Edit your profile and preferences",
+                  cardStyle: { background: "linear-gradient(135deg, rgba(51,65,85,0.30) 0%, rgba(30,41,59,0.30) 100%)", border: "1px solid rgba(100,116,139,0.28)" },
+                  text: "text-slate-300",
+                },
+              ].map(({ icon: Icon, label, desc, cardStyle, text }) => (
+                <button
+                  key={label}
+                  className="group flex flex-col gap-4 rounded-2xl p-6 text-left transition-all duration-200 hover:scale-[1.02] hover:brightness-110"
+                  style={cardStyle}
+                >
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl" style={{ background: "rgba(255,255,255,0.09)" }}>
+                    <Icon className={`h-5 w-5 ${text}`} />
+                  </div>
+                  <div>
+                    <p className={`text-base font-black ${text}`}>{label}</p>
+                    <p className="mt-0.5 text-sm text-white/35">{desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="h-10" />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
