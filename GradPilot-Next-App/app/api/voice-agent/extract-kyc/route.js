@@ -3,26 +3,29 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import dbConnect from '@/lib/mongodb';
 import User from '@/lib/models/User';
+import ConversationMemory from '@/lib/models/ConversationMemory';
+import {
+  buildCounsellingFactMap,
+  buildCounsellingProgress,
+  mergeCounsellingProfile,
+  normalizeCounsellingProfilePatch,
+} from '@/lib/counselling-profile';
 
-/**
- * Enum values from StudentProfileSchema — Gemini must output EXACTLY one of these.
- */
-const SCHEMA_ENUMS = {
-  educationLevel: ['10th/SSC', '12th/HSC', 'Diploma', 'Bachelors', 'Masters', 'PhD', 'Other'],
-  fieldOfStudy: ['Engineering', 'Business/MBA', 'Medicine', 'Arts & Humanities', 'Science', 'Law', 'IT/Computer Science', 'Other'],
-  gpaPercentage: ['Below 50%', '50-60%', '60-70%', '70-80%', '80-90%', '90%+'],
-  testStatus: ['Not Started', 'Preparing', 'Booked Exam', 'Score Available', 'Not Required'],
-  testScore: ['Below 5.5', '5.5-6.0', '6.0-6.5', '6.5-7.0', '7.0-7.5', '7.5+', 'N/A'],
-  targetCountries: ['UK', 'Ireland', 'USA', 'Canada', 'Australia', 'Germany', 'Other'],
-  courseInterest: ['Undergraduate', 'Postgraduate/Masters', 'PhD/Research', 'Foundation Year', 'English Language Course', 'Other'],
-  intakeTiming: ['January 2026', 'May 2026', 'September 2026', 'January 2027', 'Not Sure'],
-  applicationTimeline: ['Immediately', 'Within 1 Month', '1-3 Months', '3-6 Months', '6+ Months'],
-  budgetRange: ['Below ₹10 Lakhs', '₹10-20 Lakhs', '₹20-30 Lakhs', '₹30-50 Lakhs', '₹50 Lakhs+'],
-  scholarshipInterest: ['Yes, definitely need scholarship', 'Interested but not essential', 'No, self-funded', 'Education loan planned'],
-  primaryObjective: ['Career Advancement', 'Better Job Opportunities', 'Research & Academia', 'Immigration/PR', 'Personal Growth', 'Other'],
-  painPoints: ['University Selection', 'Visa Process', 'Financial Planning', 'Test Preparation', 'Application Deadlines', 'Accommodation'],
-  documentType: ['Student ID Card', 'Marksheet/Transcript', 'Degree Certificate', 'Passport', 'Other'],
-};
+const EXTRACTION_TEMPLATE = `{
+  "studentName": null,
+  "phoneNumber": null,
+  "contactEmail": null,
+  "currentLocation": null,
+  "educationLevel": null,
+  "fieldOfStudy": null,
+  "institution": null,
+  "gpaPercentage": null,
+  "targetCountries": [],
+  "courseInterest": null,
+  "englishTestStatus": null,
+  "budgetRange": null,
+  "applicationTimeline": null
+}`;
 
 export async function POST(request) {
   try {
@@ -31,9 +34,10 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { conversationId, partial } = await request.json();
+    const body = await request.json();
+    const conversationId = body.conversationId || await resolveLatestConversationId();
     if (!conversationId) {
-      return NextResponse.json({ error: 'conversationId is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Could not determine conversation to extract' }, { status: 400 });
     }
 
     // 1. Fetch transcript from ElevenLabs
@@ -48,114 +52,58 @@ export async function POST(request) {
     }
 
     const elData = await elResponse.json();
-    const transcript = (elData.transcript || [])
+    const transcriptEntries = (elData.transcript || [])
       .filter((t) => t.role !== 'tool')
+    const transcript = transcriptEntries
       .map((t) => `${t.role === 'user' ? 'Student' : 'Agent'}: ${t.message || ''}`)
       .join('\n');
 
     if (!transcript.trim()) {
-      // Empty transcript — save conversation memory only, don't extract
       return NextResponse.json({ success: true, partial: true, message: 'Conversation saved (no data to extract)' });
     }
 
-    // 2. Use Gemini to extract structured KYC data
+    // 2. Use Gemini to extract structured counselling data
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-    const prompt = `You are a precise data extraction engine. Extract student KYC/profile data from the following conversation transcript between an AI counselling agent and a student.
+    const prompt = `You are a precise extraction engine for an overseas education counselling call.
 
-You MUST output a JSON object with EXACTLY these keys. Each value MUST be one of the allowed enum values shown.
-If the student did NOT mention a field at all, set it to null (JSON null, not the string "null").
-Only use the fallback values like "Other"/"Not Sure"/"N/A" when the student DID mention the topic but their answer doesn't match any enum exactly.
+Extract ONLY the student facts that were explicitly stated by the student in the transcript.
+Do not infer, guess, or copy the agent's suggestions as if they were the student's answers.
+If the student has not actually provided a value yet, leave it null.
 
-FIELD DEFINITIONS (use EXACTLY these values):
+Return VALID JSON matching this template exactly:
+${EXTRACTION_TEMPLATE}
 
-educationLevel: ${JSON.stringify(SCHEMA_ENUMS.educationLevel)}
-fieldOfStudy: ${JSON.stringify(SCHEMA_ENUMS.fieldOfStudy)}
-institution: (free text — the name of their college/university/school)
-gpaPercentage: ${JSON.stringify(SCHEMA_ENUMS.gpaPercentage)}
-testStatus: ${JSON.stringify(SCHEMA_ENUMS.testStatus)}
-testScore: ${JSON.stringify(SCHEMA_ENUMS.testScore)}
-targetCountries: ${JSON.stringify(SCHEMA_ENUMS.targetCountries)} (array — pick all that apply)
-courseInterest: ${JSON.stringify(SCHEMA_ENUMS.courseInterest)}
-intakeTiming: ${JSON.stringify(SCHEMA_ENUMS.intakeTiming)}
-applicationTimeline: ${JSON.stringify(SCHEMA_ENUMS.applicationTimeline)}
-budgetRange: ${JSON.stringify(SCHEMA_ENUMS.budgetRange)}
-scholarshipInterest: ${JSON.stringify(SCHEMA_ENUMS.scholarshipInterest)}
-primaryObjective: ${JSON.stringify(SCHEMA_ENUMS.primaryObjective)}
-painPoints: ${JSON.stringify(SCHEMA_ENUMS.painPoints)} (array — pick all that apply)
-documentType: ${JSON.stringify(SCHEMA_ENUMS.documentType)}
-studentName: (free text — the student's name if mentioned)
-
-IMPORTANT RULES:
-- targetCountries and painPoints are ARRAYS. Wrap them in [].
-- All other enum fields are single strings, NOT arrays.
-- Use EXACT enum values including special characters like ₹.
-- If the student says "IELTS 7" → testScore should be "7.0-7.5", testStatus should be "Score Available".
-- If the student says "engineering" → fieldOfStudy should be "Engineering".
-- If budget info seems like 10-20 lakhs → budgetRange should be "₹10-20 Lakhs".
-- If the student did NOT mention a topic at all, use null for that field.
-- Only use "Other" / "Not Sure" / "N/A" when the student DID discuss the topic but gave a non-standard answer.
-- For documentType, use null if not discussed.
-- This may be a PARTIAL conversation (cut short). Extract whatever was mentioned and leave the rest as null.
+Rules:
+- Keep strings concise and human-readable.
+- Use the student's wording when possible, but lightly normalize obvious formatting.
+- targetCountries must be an array of country names mentioned by the student.
+- phoneNumber must contain the phone number only if the student explicitly said it.
+- contactEmail must contain the email only if the student explicitly said it.
+- englishTestStatus should combine status and score if both are known, for example: "IELTS taken, overall 7.0" or "PTE preparing".
+- applicationTimeline should capture when the student plans to apply, for example: "next 2 months" or "Fall 2026".
+- budgetRange should capture the spoken budget naturally, for example: "20-25 lakhs".
+- Do not output placeholder strings like "unknown" or "not provided". Use null instead.
 
 Transcript:
 ${transcript}
 
-Respond ONLY with valid JSON, no markdown fences, no extra text.`;
+Respond ONLY with valid JSON.`;
 
     const result = await model.generateContent(prompt);
     const text = result.response.text().trim();
-    let profileData;
+    let extracted;
     try {
-      profileData = JSON.parse(text.replace(/```json\n?|\n?```/g, ''));
+      extracted = JSON.parse(text.replace(/```json\n?|\n?```/g, ''));
     } catch {
       console.error('[extract-kyc] Gemini returned invalid JSON:', text);
       return NextResponse.json({ error: 'Failed to parse extracted profile' }, { status: 500 });
     }
 
-    // 3. Validate and sanitize against enums
-    // Count how many fields were actually extracted (non-null)
-    let extractedCount = 0;
-
-    for (const [field, allowed] of Object.entries(SCHEMA_ENUMS)) {
-      const val = profileData[field];
-
-      if (val === null || val === undefined) {
-        // Field not mentioned — keep as null for now
-        profileData[field] = null;
-        continue;
-      }
-
-      extractedCount++;
-
-      if (field === 'targetCountries' || field === 'painPoints') {
-        // Array fields
-        if (!Array.isArray(val)) {
-          profileData[field] = val ? [val] : null;
-        }
-        if (profileData[field]) {
-          profileData[field] = profileData[field]
-            .map((v) => allowed.find((a) => a.toLowerCase() === String(v).toLowerCase()) || null)
-            .filter(Boolean);
-          if (profileData[field].length === 0) profileData[field] = null;
-        }
-      } else {
-        // Single-value enum fields
-        if (!allowed.includes(val)) {
-          const match = allowed.find((a) => a.toLowerCase() === String(val).toLowerCase());
-          profileData[field] = match || null;
-        }
-      }
-    }
-
-    // Ensure institution is a string or null
-    if (profileData.institution && typeof profileData.institution === 'string') {
-      extractedCount++;
-    } else {
-      profileData.institution = null;
-    }
+    const profilePatch = normalizeCounsellingProfilePatch(extracted);
+    const extractedCount = Object.keys(profilePatch).length;
 
     // 4. Save to MongoDB
     await dbConnect();
@@ -165,74 +113,70 @@ Respond ONLY with valid JSON, no markdown fences, no extra text.`;
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Build clean profile — merge with existing data so we don't lose previously collected fields
-    const existingProfile = user.studentProfile || {};
-
-    // Determine if this is a complete or partial profile
-    // Count core fields present in EITHER new extraction OR existing profile
-    const coreFields = ['educationLevel', 'fieldOfStudy', 'targetCountries', 'courseInterest', 'budgetRange', 'testStatus'];
-    const coreFieldsPresent = coreFields.filter(
-      (f) => (profileData[f] !== null && profileData[f] !== undefined) ||
-             (existingProfile[f] !== null && existingProfile[f] !== undefined)
-    ).length;
-    const isComplete = coreFieldsPresent >= 5;
-    const defaults = {
-      educationLevel: 'Other',
-      fieldOfStudy: 'Other',
-      institution: 'Not specified',
-      gpaPercentage: 'Below 50%',
-      testStatus: 'Not Started',
-      testScore: 'N/A',
-      targetCountries: ['UK'],
-      courseInterest: 'Other',
-      intakeTiming: 'Not Sure',
-      applicationTimeline: '6+ Months',
-      budgetRange: 'Below ₹10 Lakhs',
-      scholarshipInterest: 'Interested but not essential',
-      primaryObjective: 'Other',
-      painPoints: ['University Selection'],
-      documentType: 'Other',
-    };
-
-    const cleanProfile = {};
-    for (const field of Object.keys(defaults)) {
-      if (profileData[field] !== null && profileData[field] !== undefined) {
-        // New data from this conversation takes priority
-        cleanProfile[field] = profileData[field];
-      } else if (existingProfile[field] !== null && existingProfile[field] !== undefined) {
-        // Keep existing data from previous conversations
-        cleanProfile[field] = existingProfile[field];
-      } else {
-        // No data from either — use default
-        cleanProfile[field] = defaults[field];
-      }
-    }
-
-    cleanProfile.verificationStatus = 'Pending';
-    cleanProfile.completedAt = new Date();
-
-    if (profileData.studentName) {
-      cleanProfile.studentName = String(profileData.studentName);
-    }
+    const existingProfile = user.studentProfile?.toObject?.() || {};
+    const { mergedProfile } = mergeCounsellingProfile(existingProfile, profilePatch);
+    const counsellingProgress = buildCounsellingProgress(mergedProfile);
+    const isComplete = user.hasCompletedKYC || counsellingProgress.isComplete;
 
     await User.findByIdAndUpdate(
       session.user.id,
       {
-        studentProfile: cleanProfile,
+        studentProfile: mergedProfile,
         hasCompletedKYC: isComplete,
         updatedAt: new Date(),
       },
-      { new: true, runValidators: true }
+      { new: true, runValidators: false }
     );
+
+    // Save transcript to ConversationMemory so future sessions have context.
+    // This avoids a separate /api/voice-agent/conversations fetch (which would
+    // call the ElevenLabs transcript endpoint a second time for the same convo).
+    try {
+      const rawMessages = (elData.transcript || []).map((t) => ({
+        role: t.role === 'agent' ? 'agent' : t.role === 'tool' ? 'tool' : 'user',
+        message: t.message || '',
+        timeInCallSecs: t.time_in_call_secs || 0,
+      }));
+
+      const kycFacts = buildCounsellingFactMap(mergedProfile);
+
+      const profileLine = Object.entries(kycFacts)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('; ');
+
+      const summary = elData.analysis?.transcript_summary
+        || `Counselling onboarding — ${
+          counsellingProgress.isComplete ? 'all required counselling fields were collected' : 'partial counselling profile collected'
+        }. ${profileLine}`.trim();
+
+      await ConversationMemory.findOneAndUpdate(
+        { conversationId },
+        {
+          userId: session.user.id,
+          conversationId,
+          agentId: elData.agent_id,
+          messages: rawMessages,
+          summary,
+          extractedFacts: kycFacts,
+          callDurationSecs: elData.metadata?.call_duration_secs || 0,
+          mode: 'onboarding',
+        },
+        { upsert: true, new: true }
+      );
+    } catch (memErr) {
+      // Non-fatal: KYC data is already saved; memory save failure is acceptable.
+      console.warn('[extract-kyc] ConversationMemory save failed:', memErr.message);
+    }
 
     return NextResponse.json({
       success: true,
-      partial: !isComplete,
-      message: isComplete
-        ? 'Profile extracted and saved from voice conversation'
-        : 'Partial profile saved — continue the conversation to complete it',
-      profile: cleanProfile,
+      partial: !counsellingProgress.isComplete,
+      message: counsellingProgress.isComplete
+        ? 'Profile extracted and saved from the voice conversation'
+        : 'Partial profile saved — continue the conversation to complete the remaining fields',
+      profile: mergedProfile,
       extractedFields: extractedCount,
+      counsellingProgress,
     });
   } catch (error) {
     console.error('[extract-kyc] Error:', error);
@@ -240,5 +184,24 @@ Respond ONLY with valid JSON, no markdown fences, no extra text.`;
       { error: 'Failed to extract and save profile' },
       { status: 500 }
     );
+  }
+}
+
+async function resolveLatestConversationId() {
+  try {
+    const listUrl = new URL('https://api.elevenlabs.io/v1/convai/conversations');
+    listUrl.searchParams.set('agent_id', process.env.ELEVENLABS_AGENT_ID || 'agent_6301kncrnakkft1seqw159q12j6b');
+    listUrl.searchParams.set('page_size', '1');
+
+    const response = await fetch(listUrl.toString(), {
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY },
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    return data?.conversations?.[0]?.conversation_id || null;
+  } catch {
+    return null;
   }
 }

@@ -2,184 +2,84 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  CheckCircle2, Circle, Pencil, Check, X, Phone,
-  GraduationCap, MapPin, BookOpen, Calendar, Wallet,
-  Target, AlertCircle, FileText, FlaskConical, Award, Clock,
+  Award,
+  BookOpen,
+  Check,
+  CheckCircle2,
+  Circle,
+  Clock,
+  FlaskConical,
+  GraduationCap,
+  Mail,
+  MapPin,
+  Pencil,
+  Phone,
+  Target,
+  User,
+  Wallet,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import {
+  COUNSELLING_FIELDS,
+  buildCounsellingPatch,
+  getCounsellingFieldValue,
+  isMeaningfulCounsellingValue,
+} from '@/lib/counselling-profile';
 
-/**
- * The 12 KYC fields the voice agent collects, in display order.
- * Each entry maps a DB key → human label, icon, and the set of valid options.
- */
-const PROFILE_FIELDS = [
-  {
-    key: 'educationLevel',
-    label: 'Education Level',
-    icon: GraduationCap,
-    options: ['10th/SSC', '12th/HSC', 'Diploma', 'Bachelors', 'Masters', 'PhD', 'Other'],
-  },
-  {
-    key: 'fieldOfStudy',
-    label: 'Field of Study',
-    icon: BookOpen,
-    options: ['Engineering', 'Business/MBA', 'Medicine', 'Arts & Humanities', 'Science', 'Law', 'IT/Computer Science', 'Other'],
-  },
-  {
-    key: 'institution',
-    label: 'Institution',
-    icon: Award,
-    freeText: true,
-  },
-  {
-    key: 'gpaPercentage',
-    label: 'GPA / Percentage',
-    icon: Target,
-    options: ['Below 50%', '50-60%', '60-70%', '70-80%', '80-90%', '90%+'],
-  },
-  {
-    key: 'testStatus',
-    label: 'Test Status',
-    icon: FlaskConical,
-    options: ['Not Started', 'Preparing', 'Booked Exam', 'Score Available', 'Not Required'],
-  },
-  {
-    key: 'testScore',
-    label: 'Test Score',
-    icon: Target,
-    options: ['Below 5.5', '5.5-6.0', '6.0-6.5', '6.5-7.0', '7.0-7.5', '7.5+', 'N/A'],
-  },
-  {
-    key: 'targetCountries',
-    label: 'Target Countries',
-    icon: MapPin,
-    options: ['UK', 'Ireland', 'USA', 'Canada', 'Australia', 'Germany', 'Other'],
-    isArray: true,
-  },
-  {
-    key: 'courseInterest',
-    label: 'Course Interest',
-    icon: BookOpen,
-    options: ['Undergraduate', 'Postgraduate/Masters', 'PhD/Research', 'Foundation Year', 'English Language Course', 'Other'],
-  },
-  {
-    key: 'intakeTiming',
-    label: 'Intake Timing',
-    icon: Calendar,
-    options: ['January 2026', 'May 2026', 'September 2026', 'January 2027', 'Not Sure'],
-  },
-  {
-    key: 'budgetRange',
-    label: 'Budget Range',
-    icon: Wallet,
-    options: ['Below ₹10 Lakhs', '₹10-20 Lakhs', '₹20-30 Lakhs', '₹30-50 Lakhs', '₹50 Lakhs+'],
-  },
-  {
-    key: 'scholarshipInterest',
-    label: 'Scholarship Interest',
-    icon: Award,
-    options: ['Yes, definitely need scholarship', 'Interested but not essential', 'No, self-funded', 'Education loan planned'],
-  },
-  {
-    key: 'primaryObjective',
-    label: 'Primary Objective',
-    icon: Target,
-    options: ['Career Advancement', 'Better Job Opportunities', 'Research & Academia', 'Immigration/PR', 'Personal Growth', 'Other'],
-  },
-];
-
-/** The default / placeholder values that mean "not really answered" */
-const DEFAULT_VALUES = new Set([
-  'Other', 'Not specified', 'Not Started', 'N/A', 'Not Sure',
-  '6+ Months', 'Below 50%', 'Below ₹10 Lakhs',
-]);
-
-function isFieldFilled(value) {
-  if (value === null || value === undefined) return false;
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === 'string') return value.trim() !== '' && !DEFAULT_VALUES.has(value);
-  return true;
-}
+const FIELD_ICONS = {
+  studentName: User,
+  phoneNumber: Phone,
+  contactEmail: Mail,
+  currentLocation: MapPin,
+  educationLevel: GraduationCap,
+  fieldOfStudy: BookOpen,
+  institution: Award,
+  gpaPercentage: Target,
+  targetCountries: MapPin,
+  courseInterest: BookOpen,
+  englishTestStatus: FlaskConical,
+  budgetRange: Wallet,
+  applicationTimeline: Clock,
+};
 
 function displayValue(value) {
-  if (value === null || value === undefined) return null;
-  if (Array.isArray(value)) return value.length > 0 ? value.join(', ') : null;
-  if (typeof value === 'string' && value.trim()) return value;
-  return null;
+  if (Array.isArray(value)) return value.join(', ');
+  return value || null;
 }
 
-// ────────────────────────────────────────────────────────────────
-// Inline editor for a single field
-// ────────────────────────────────────────────────────────────────
 function FieldEditor({ field, currentValue, onSave, onCancel }) {
   const [value, setValue] = useState(
-    field.isArray ? (currentValue || []) : (currentValue || '')
+    Array.isArray(currentValue) ? currentValue.join(', ') : (currentValue || '')
   );
-
-  const handleToggleOption = (opt) => {
-    setValue((prev) => {
-      const arr = Array.isArray(prev) ? prev : [];
-      return arr.includes(opt) ? arr.filter((v) => v !== opt) : [...arr, opt];
-    });
-  };
 
   return (
     <div className="mt-2 space-y-2">
-      {field.freeText ? (
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-emerald-500/40"
-          autoFocus
-        />
-      ) : field.isArray ? (
-        <div className="flex flex-wrap gap-1.5">
-          {field.options.map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              onClick={() => handleToggleOption(opt)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors cursor-pointer ${
-                (Array.isArray(value) ? value : []).includes(opt)
-                  ? 'border-emerald-500 bg-emerald-500/15 text-emerald-400'
-                  : 'border-border bg-muted/40 text-muted-foreground hover:border-emerald-500/40'
-              }`}
-            >
-              {opt}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {field.options.map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              onClick={() => setValue(opt)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors cursor-pointer ${
-                value === opt
-                  ? 'border-emerald-500 bg-emerald-500/15 text-emerald-400'
-                  : 'border-border bg-muted/40 text-muted-foreground hover:border-emerald-500/40'
-              }`}
-            >
-              {opt}
-            </button>
-          ))}
-        </div>
+      <input
+        type={field.inputType || 'text'}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder={field.placeholder}
+        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-emerald-500/40"
+        autoFocus
+      />
+      {field.isArray && (
+        <p className="text-[11px] text-muted-foreground">
+          Separate multiple values with commas.
+        </p>
       )}
       <div className="flex gap-2 pt-1">
         <button
           type="button"
           onClick={() => onSave(field.key, value)}
-          className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition-colors cursor-pointer"
+          className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-700 cursor-pointer"
         >
           <Check className="h-3.5 w-3.5" /> Save
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors cursor-pointer"
+          className="flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted cursor-pointer"
         >
           <X className="h-3.5 w-3.5" /> Cancel
         </button>
@@ -188,26 +88,23 @@ function FieldEditor({ field, currentValue, onSave, onCancel }) {
   );
 }
 
-// ────────────────────────────────────────────────────────────────
-// Main component
-// ────────────────────────────────────────────────────────────────
 export default function StudentProfileCard({ onResumeCall, refreshKey }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editingField, setEditingField] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [isComplete, setIsComplete] = useState(false);
+  const [progress, setProgress] = useState({ filledCount: 0, totalCount: COUNSELLING_FIELDS.length, isComplete: false });
 
-  // Fetch profile on mount and whenever refreshKey changes
   const fetchProfile = useCallback(async () => {
     try {
       const res = await fetch('/api/kyc');
       if (!res.ok) return;
+
       const data = await res.json();
       setProfile(data.studentProfile || {});
-      setIsComplete(!!data.hasCompletedKYC);
+      setProgress(data.counsellingProgress || { filledCount: 0, totalCount: COUNSELLING_FIELDS.length, isComplete: false });
     } catch {
-      // silent
+      // Silent refresh failure.
     } finally {
       setLoading(false);
     }
@@ -217,34 +114,40 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
     fetchProfile();
   }, [fetchProfile, refreshKey]);
 
-  // Count filled fields
-  const filledFields = PROFILE_FIELDS.filter(
-    (f) => profile && isFieldFilled(profile[f.key])
-  );
-  const filledCount = filledFields.length;
-  const totalCount = PROFILE_FIELDS.length;
-  const progressPct = Math.round((filledCount / totalCount) * 100);
+  useEffect(() => {
+    const handleProfileUpdate = () => {
+      fetchProfile();
+    };
 
-  // Save a single field edit
+    window.addEventListener('counselling-profile:updated', handleProfileUpdate);
+    return () => {
+      window.removeEventListener('counselling-profile:updated', handleProfileUpdate);
+    };
+  }, [fetchProfile]);
+
   const handleSave = async (key, value) => {
     setSaving(true);
+
     try {
+      const patch = buildCounsellingPatch(key, value);
       const res = await fetch('/api/kyc', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [key]: value }),
+        body: JSON.stringify(patch),
       });
+
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Save failed');
       }
-      setProfile((prev) => ({ ...prev, [key]: value }));
+
+      setProfile((prev) => ({ ...(prev || {}), ...patch }));
       setEditingField(null);
-      toast.success('Updated!');
-      // Re-fetch to get server-side completeness check
+      toast.success('Updated');
+      window.dispatchEvent(new CustomEvent('counselling-profile:updated', { detail: { source: 'manual-edit' } }));
       fetchProfile();
-    } catch (err) {
-      toast.error(err.message);
+    } catch (error) {
+      toast.error(error.message || 'Unable to save this field');
     } finally {
       setSaving(false);
     }
@@ -258,23 +161,27 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
     );
   }
 
-  const hasAnyData = profile && filledCount > 0;
+  const filledCount = progress.filledCount || 0;
+  const totalCount = progress.totalCount || COUNSELLING_FIELDS.length;
+  const isComplete = !!progress.isComplete;
+  const progressPct = totalCount > 0 ? Math.round((filledCount / totalCount) * 100) : 0;
+  const hasAnyData = COUNSELLING_FIELDS.some((field) =>
+    isMeaningfulCounsellingValue(getCounsellingFieldValue(profile || {}, field.key))
+  );
 
-  // Nothing collected yet
   if (!hasAnyData) return null;
 
   return (
-    <div className="space-y-6">
-      {/* ── Progress header ── */}
+    <div className="space-y-6 rounded-4xl border border-border/50 bg-card/70 p-6 shadow-[0_24px_80px_rgba(15,23,42,0.06)] backdrop-blur-sm sm:p-7">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="ivy-font text-2xl font-bold text-foreground">
-            Your Profile
+            Counselling Profile
           </h2>
           <p className="ivy-font mt-1 text-sm text-muted-foreground">
             {isComplete
-              ? 'All information collected — you\'re all set!'
-              : `${filledCount} of ${totalCount} fields completed`}
+              ? 'All counselling fields are recorded. Resume is hidden because nothing is missing.'
+              : `${filledCount} of ${totalCount} counselling fields recorded`}
           </p>
         </div>
         {!isComplete && onResumeCall && (
@@ -289,10 +196,9 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
         )}
       </div>
 
-      {/* ── Progress bar ── */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs">
-          <span className="ivy-font font-medium text-muted-foreground">Profile Completion</span>
+          <span className="ivy-font font-medium text-muted-foreground">Counselling Completion</span>
           <span className="ivy-font font-bold text-emerald-500">{progressPct}%</span>
         </div>
         <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted/50">
@@ -303,13 +209,12 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
         </div>
       </div>
 
-      {/* ── Field cards ── */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {PROFILE_FIELDS.map((field) => {
-          const Icon = field.icon;
-          const raw = profile?.[field.key];
-          const filled = isFieldFilled(raw);
-          const display = displayValue(raw);
+      <div className="grid gap-3 sm:grid-cols-2">
+        {COUNSELLING_FIELDS.map((field) => {
+          const Icon = FIELD_ICONS[field.key] || User;
+          const rawValue = getCounsellingFieldValue(profile || {}, field.key);
+          const filled = isMeaningfulCounsellingValue(rawValue);
+          const shownValue = displayValue(rawValue);
           const isEditing = editingField === field.key;
 
           return (
@@ -321,7 +226,6 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
                   : 'border-border/50 bg-muted/20'
               }`}
             >
-              {/* Top row: icon + label + status */}
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2.5">
                   <div
@@ -349,7 +253,7 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
                       type="button"
                       onClick={() => setEditingField(field.key)}
                       className="rounded-md p-1 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground cursor-pointer"
-                      title="Edit"
+                      title={`Edit ${field.label}`}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
@@ -357,11 +261,10 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
                 </div>
               </div>
 
-              {/* Value */}
               {isEditing ? (
                 <FieldEditor
                   field={field}
-                  currentValue={raw}
+                  currentValue={rawValue}
                   onSave={handleSave}
                   onCancel={() => setEditingField(null)}
                 />
@@ -371,7 +274,7 @@ export default function StudentProfileCard({ onResumeCall, refreshKey }) {
                     filled ? 'text-foreground' : 'text-muted-foreground/50 italic'
                   }`}
                 >
-                  {display || 'Not provided yet'}
+                  {shownValue || 'Not recorded yet'}
                 </p>
               )}
             </div>

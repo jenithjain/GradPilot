@@ -18,7 +18,8 @@ import {
 } from "lucide-react";
 
 const ElevenLabsVoiceAgent = dynamic(() => import('@/components/ElevenLabsVoiceAgent'), { ssr: false });
-const AICounsellingDashboard = dynamic(() => import('@/components/AICounsellingDashboard'), { ssr: false, loading: () => null });
+const CounsellingConversationPanel = dynamic(() => import('@/components/CounsellingConversationPanel'), { ssr: false, loading: () => null });
+const CounsellingSidebarCard = dynamic(() => import('@/components/CounsellingSidebarCard'), { ssr: false, loading: () => null });
 const StudentProfileCard = dynamic(() => import('@/components/StudentProfileCard'), { ssr: false });
 const LiveKYCChecklist = dynamic(() => import('@/components/LiveKYCChecklist'), { ssr: false });
 
@@ -31,7 +32,7 @@ const AVATARS = [
 
 export default function Dashboard() {
   const router = useRouter();
-  const { data: session, update: updateSession } = useSession();
+  const { update: updateSession } = useSession();
   const [showJourneyModal, setShowJourneyModal] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
   const [showFillMethod, setShowFillMethod] = useState(false);
@@ -40,61 +41,117 @@ export default function Dashboard() {
   // KYC status state
   const [kycStatus, setKycStatus] = useState('loading'); // 'loading' | 'completed' | 'in-progress' | 'new'
   const [studentProfile, setStudentProfile] = useState(null);
-  const [savedAvatar, setSavedAvatar] = useState(null);
+  const [latestConversation, setLatestConversation] = useState(null);
+  const [counsellingProgress, setCounsellingProgress] = useState(null);
+  const [preparingResumeCall, setPreparingResumeCall] = useState(false);
+  const [preparedVoiceSession, setPreparedVoiceSession] = useState(null);
   // Counter to force StudentProfileCard refresh after voice agent completes
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
 
-  // Check KYC status on mount
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/kyc');
-        if (!res.ok) throw new Error();
-        const data = await res.json();
-        if (cancelled) return;
+  const refreshDashboardState = useCallback(async () => {
+    try {
+      const res = await fetch('/api/kyc', { cache: 'no-store' });
+      if (!res.ok) throw new Error();
 
-        setStudentProfile(data.studentProfile || null);
+      const data = await res.json();
+      const profile = data.studentProfile || null;
+      const progress = data.counsellingProgress || { filledCount: 0, totalCount: 0, isComplete: false };
+      const hasCounsellingData = (progress.filledCount || 0) > 0;
+      const hasAnyProfileData = !!(profile && Object.keys(profile).length > 0);
 
-        if (data.hasCompletedKYC && data.studentProfile) {
-          setKycStatus('completed');
-        } else if (data.studentProfile && Object.keys(data.studentProfile).length > 0) {
-          // Has partial data from a previous conversation
-          setKycStatus('in-progress');
-        } else {
-          setKycStatus('new');
-        }
-      } catch {
-        if (!cancelled) setKycStatus('new');
+      setStudentProfile(profile);
+      setLatestConversation(data.latestConversation || null);
+      setCounsellingProgress(progress);
+
+      if (progress.isComplete || (data.hasCompletedKYC && !hasCounsellingData)) {
+        setKycStatus('completed');
+      } else if (hasCounsellingData || hasAnyProfileData) {
+        setKycStatus('in-progress');
+      } else {
+        setKycStatus('new');
       }
 
-      // Load saved avatar from localStorage
-      try {
-        const stored = localStorage.getItem('selectedAvatar');
-        if (stored && !cancelled) setSavedAvatar(JSON.parse(stored));
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [profileRefreshKey]);
+      return {
+        isComplete: progress.isComplete || (data.hasCompletedKYC && !hasCounsellingData),
+        filledCount: progress.filledCount || 0,
+        latestConversationId: data.latestConversation?.conversationId || null,
+      };
+    } catch {
+      setKycStatus('new');
+      return { isComplete: false, filledCount: 0, latestConversationId: null };
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDashboardState();
+  }, [profileRefreshKey, refreshDashboardState]);
+
+  useEffect(() => {
+    const handleProfileUpdate = () => {
+      refreshDashboardState();
+    };
+
+    window.addEventListener('counselling-profile:updated', handleProfileUpdate);
+    return () => {
+      window.removeEventListener('counselling-profile:updated', handleProfileUpdate);
+    };
+  }, [refreshDashboardState]);
 
   const handleVoiceComplete = useCallback(async () => {
     setShowVoiceAgent(false);
-    // Refresh the profile card + KYC status
+    setPreparedVoiceSession(null);
     setProfileRefreshKey((k) => k + 1);
-    try {
-      const res = await fetch('/api/kyc');
-      if (res.ok) {
-        const data = await res.json();
-        setStudentProfile(data.studentProfile || null);
-        if (data.hasCompletedKYC && data.studentProfile) {
-          setKycStatus('completed');
-          await updateSession({ hasCompletedKYC: true });
-        } else if (data.studentProfile && Object.keys(data.studentProfile).length > 0) {
-          setKycStatus('in-progress');
+
+    // Wait for ElevenLabs to finalize transcript before fetching results
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const state = await refreshDashboardState();
+    if (state.isComplete) {
+      await updateSession({ hasCompletedKYC: true });
+      return;
+    }
+
+    // Safety net: if extraction didn't populate the profile, retry once
+    if (state.filledCount === 0 && state.latestConversationId) {
+      try {
+        const retryRes = await fetch('/api/voice-agent/extract-kyc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationId: state.latestConversationId }),
+        });
+        if (retryRes.ok) {
+          const retried = await refreshDashboardState();
+          if (retried.isComplete) {
+            await updateSession({ hasCompletedKYC: true });
+          }
         }
+      } catch {
+        // Non-fatal — the primary extraction path handles most cases
       }
-    } catch {}
-  }, [updateSession]);
+    }
+  }, [refreshDashboardState, updateSession]);
+
+  const handleResumeCall = useCallback(async () => {
+    setPreparingResumeCall(true);
+
+    try {
+      const res = await fetch('/api/voice-agent/memory?prepareResume=1', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Failed to prepare resume context');
+
+      const data = await res.json();
+      setPreparedVoiceSession({
+        context: data.context || '',
+        studentName: data.studentName || '',
+        resumePlan: data.resumePlan || null,
+      });
+    } catch (error) {
+      console.error('[Dashboard] Resume preparation failed:', error);
+      setPreparedVoiceSession(null);
+    } finally {
+      setPreparingResumeCall(false);
+      setShowVoiceAgent(true);
+    }
+  }, []);
 
   const handleAvatarSelect = (avatar) => {
     setSelectedAvatar(avatar);
@@ -122,36 +179,84 @@ export default function Dashboard() {
     );
   }
 
-  // ── KYC Completed → Show the AI counselling dashboard with profile card ──
-  if (kycStatus === 'completed' && studentProfile) {
-    const avatar = savedAvatar || AVATARS[0];
-    const dashData = {
-      fullName: studentProfile.studentName || session?.user?.name || '',
-      educationLevel: studentProfile.educationLevel || '',
-      fieldOfStudy: studentProfile.fieldOfStudy || '',
-      institution: studentProfile.institution || '',
-      gpa: studentProfile.gpaPercentage || '',
-      targetCountry: studentProfile.targetCountries || [],
-      courseInterest: studentProfile.courseInterest || '',
-      testStatus: studentProfile.testStatus || '',
-      testScore: studentProfile.testScore || '',
-      budget: studentProfile.budgetRange || '',
-      scholarshipInterest: studentProfile.scholarshipInterest || '',
-      applicationTimeline: studentProfile.applicationTimeline || '',
-      careerGoal: studentProfile.primaryObjective || '',
-    };
+  if ((kycStatus === 'completed' || kycStatus === 'in-progress') && studentProfile) {
+    const hasEditableProfile = (counsellingProgress?.filledCount || 0) > 0;
+
     return (
       <div className="min-h-screen w-full">
-        <AICounsellingDashboard avatar={avatar} data={dashData} onClose={() => {}} />
-        <div className="container mx-auto max-w-7xl px-6 pb-12">
-          <StudentProfileCard refreshKey={profileRefreshKey} />
+        <div className="container mx-auto max-w-[1380px] space-y-8 p-4 sm:p-6 lg:p-8">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h1 className="ivy-font mb-2 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
+                Student Dashboard
+              </h1>
+              <p className="ivy-font max-w-3xl text-sm leading-7 text-muted-foreground sm:text-base">
+                Live counselling data from ElevenLabs, persisted in MongoDB and ready to resume when anything is still missing.
+              </p>
+            </div>
+          </div>
+
+          <div className={`grid gap-6 ${hasEditableProfile ? 'xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)]' : 'xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.8fr)]'}`}>
+            <CounsellingConversationPanel
+              conversation={latestConversation}
+              progress={counsellingProgress}
+            />
+
+            {hasEditableProfile ? (
+              <StudentProfileCard
+                onResumeCall={counsellingProgress?.isComplete ? undefined : handleResumeCall}
+                refreshKey={profileRefreshKey}
+              />
+            ) : (
+              <CounsellingSidebarCard
+                progress={counsellingProgress}
+                onResumeCall={handleResumeCall}
+              />
+            )}
+          </div>
         </div>
+
+        {preparingResumeCall && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/88 backdrop-blur-sm">
+            <div className="rounded-[28px] border border-border/50 bg-card/85 px-8 py-7 text-center shadow-2xl">
+              <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+              <h2 className="ivy-font mt-4 text-2xl font-bold text-foreground">Preparing resume flow</h2>
+              <p className="ivy-font mt-2 max-w-md text-sm leading-7 text-muted-foreground">
+                Gemini is reviewing the saved profile and previous call so the next conversation can skip the generic opening and go straight to the missing details.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {showVoiceAgent && (
+          <div className="fixed inset-0 z-50 flex bg-background">
+            <div className="hidden w-72 border-r border-border/40 lg:flex">
+              <LiveKYCChecklist active className="w-full rounded-none border-0" />
+            </div>
+            <div className="relative flex-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVoiceAgent(false);
+                  setPreparedVoiceSession(null);
+                }}
+                className="absolute right-4 top-4 z-10 rounded-full border border-border/50 bg-card p-2 text-muted-foreground shadow-md transition-colors hover:text-foreground"
+                aria-label="Close voice agent"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <ElevenLabsVoiceAgent
+                mode="onboarding"
+                onComplete={handleVoiceComplete}
+                sessionMemory={preparedVoiceSession}
+              />
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // ── In-progress: show profile card with collected data + resume option ──
-  // ── New: show onboarding prompt ──
   return (
     <div className="min-h-screen w-full">
       <div className="container mx-auto max-w-7xl space-y-8 p-6">
@@ -165,14 +270,6 @@ export default function Dashboard() {
             </p>
           </div>
         </div>
-
-        {/* ── Show profile card if any data has been collected ── */}
-        {kycStatus === 'in-progress' && (
-          <StudentProfileCard
-            onResumeCall={() => setShowVoiceAgent(true)}
-            refreshKey={profileRefreshKey}
-          />
-        )}
 
         {/* ── Onboarding prompt (shown when NO data yet) ── */}
         {kycStatus === 'new' && (

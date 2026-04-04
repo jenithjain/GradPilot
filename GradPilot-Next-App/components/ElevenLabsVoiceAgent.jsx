@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
-const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || 'agent_8401kncp2mpdexkt4cwhncy0szjf';
+const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || 'agent_6301kncrnakkft1seqw159q12j6b';
 
 /**
  * mode:
@@ -14,19 +14,25 @@ const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || 'agent_8401kncp2
  *
  * onComplete is called when the session finishes.
  */
-export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }) {
+export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding', sessionMemory = null }) {
   const widgetContainerRef = useRef(null);
   const conversationIdRef = useRef(null);
   const [memoryLoaded, setMemoryLoaded] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
   const [disconnectReason, setDisconnectReason] = useState(''); // 'quota' | 'guardrail' | ''
+  const [reconnecting, setReconnecting] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const lastConversationIdRef = useRef(null); // track last cid for cleanup
   const memoryContextRef = useRef('');
   const studentNameRef = useRef('');
   const hasExtractedRef = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const modeRef = useRef(mode);
+  const resumePlanRef = useRef(null);
+  const liveExtractIntervalRef = useRef(null);
+  const liveLineCountRef = useRef(0);
+  const liveExtractingRef = useRef(false);
 
   // Keep refs in sync without triggering effect re-runs
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
@@ -36,6 +42,14 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
   useEffect(() => {
     let cancelled = false;
 
+    if (sessionMemory) {
+      memoryContextRef.current = sessionMemory.context || '';
+      studentNameRef.current = sessionMemory.studentName || '';
+      resumePlanRef.current = sessionMemory.resumePlan || null;
+      setMemoryLoaded(true);
+      return () => { cancelled = true; };
+    }
+
     (async () => {
       try {
         const res = await fetch('/api/voice-agent/memory');
@@ -43,6 +57,7 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
           const data = await res.json();
           memoryContextRef.current = data.context || '';
           studentNameRef.current = data.studentName || '';
+          resumePlanRef.current = data.resumePlan || null;
         }
       } catch (err) {
         console.error('[ElevenLabs] Failed to load memory:', err);
@@ -51,7 +66,7 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
     })();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [sessionMemory]);
 
   // Mount the widget once memory is loaded (or on retry)
   useEffect(() => {
@@ -78,27 +93,77 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
       timeoutIds.push(window.setTimeout(fireExpandEvent, 800));
     };
 
-    // ── Extract KYC from transcript via Gemini (onboarding mode) ──
-    const extractAndSaveKyc = async () => {
-      if (hasExtractedRef.current) return;
-      hasExtractedRef.current = true;
+    const emitProfileUpdate = (detail = {}) => {
+      window.dispatchEvent(
+        new CustomEvent('counselling-profile:updated', {
+          detail,
+        })
+      );
+    };
 
-      const cid = conversationIdRef.current;
-      if (!cid) {
-        console.warn('[ElevenLabs] No conversation ID — cannot extract KYC');
+    const startLiveExtractionLoop = () => {
+      if (modeRef.current !== 'onboarding' || liveExtractIntervalRef.current) {
         return;
       }
 
+      liveLineCountRef.current = 0;
+      liveExtractingRef.current = false;
+
+      liveExtractIntervalRef.current = window.setInterval(async () => {
+        if (liveExtractingRef.current) return;
+        liveExtractingRef.current = true;
+
+        try {
+          const res = await fetch('/api/voice-agent/live-extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              conversationId: conversationIdRef.current,
+              lastLineCount: liveLineCountRef.current,
+            }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+
+            if (data.conversationId) {
+              conversationIdRef.current = data.conversationId;
+            }
+
+            if (typeof data.lineCount === 'number') {
+              liveLineCountRef.current = data.lineCount;
+            }
+
+            if (data.transcriptUpdated || data.changedFields?.length || data.newFields?.length) {
+              emitProfileUpdate({
+                source: 'live-extract',
+                changedFields: data.changedFields || [],
+                newFields: data.newFields || [],
+                progress: data.counsellingProgress || null,
+                conversationId: data.conversationId || conversationIdRef.current,
+              });
+            }
+          }
+        } catch {
+          // Non-fatal — just skip this cycle
+        } finally {
+          liveExtractingRef.current = false;
+        }
+      }, 6_000);
+    };
+
+    // ── Extract KYC from transcript via Gemini (onboarding mode) ──
+    const extractAndSaveKyc = async (overrideCid) => {
+      if (hasExtractedRef.current) return;
+      hasExtractedRef.current = true;
+
+      const cid = overrideCid || conversationIdRef.current;
+
       setExtracting(true);
       try {
-        // First save the conversation to memory
-        await fetch('/api/voice-agent/conversations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: cid, mode: 'onboarding' }),
-        });
-
-        // Then extract structured KYC from the transcript via Gemini
+        // Extract structured KYC from the transcript via Gemini.
+        // The extract-kyc route also saves ConversationMemory in the same
+        // ElevenLabs API call, so no separate /conversations call is needed.
         const res = await fetch('/api/voice-agent/extract-kyc', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -106,6 +171,13 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Extraction failed');
+
+        emitProfileUpdate({
+          source: 'extract-kyc',
+          final: true,
+          progress: data.counsellingProgress || null,
+          extractedFields: data.extractedFields || 0,
+        });
 
         if (data.partial) {
           toast.success('Progress saved! Continue next time to complete your profile.');
@@ -171,12 +243,22 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
       // Inject persistent memory via dynamic variables
       const memoryCtx = memoryContextRef.current;
       const studentName = studentNameRef.current;
+      const resumePlan = resumePlanRef.current;
+      const resumeBrief = resumePlan
+        ? [resumePlan.firstTurnGuidance, resumePlan.instructionSummary].filter(Boolean).join('\n')
+        : '';
 
-      if (memoryCtx || studentName) {
+      if (memoryCtx || studentName || resumePlan) {
         config.dynamicVariables = {
           ...(config.dynamicVariables || {}),
           student_name: studentName,
           student_memory: memoryCtx,
+          returning_student: resumePlan?.returningStudent ? 'true' : 'false',
+          resume_mode: resumePlan?.resumeMode || 'fresh',
+          resume_focus_fields: resumePlan?.focusFields?.join(', ') || '',
+          resume_brief: resumeBrief,
+          skip_opening_sequence: resumePlan?.shouldSkipOpeningSequence ? 'true' : 'false',
+          completion_estimate: String(resumePlan?.completionEstimate ?? ''),
         };
       }
     };
@@ -186,6 +268,8 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
       if (event.detail?.conversationId) {
         conversationIdRef.current = event.detail.conversationId;
       }
+
+      startLiveExtractionLoop();
     };
 
     // ── Handle disconnect (guardrail, quota, network error, user ended call) ──
@@ -199,24 +283,48 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
       const isGuardrail = /guardrail/i.test(reason);
 
       if (isQuota) {
-        // Quota errors can't be retried — no point saving/extracting
+        // Quota = concurrent slot still held. Store the cid so we can DELETE it on retry.
+        lastConversationIdRef.current = cid || null;
+        conversationIdRef.current = null;
+        if (liveExtractIntervalRef.current) {
+          window.clearInterval(liveExtractIntervalRef.current);
+          liveExtractIntervalRef.current = null;
+        }
         setDisconnectReason('quota');
         setDisconnected(true);
         return;
       }
 
+      // Stop live extraction interval — the call is over
+      if (liveExtractIntervalRef.current) {
+        window.clearInterval(liveExtractIntervalRef.current);
+        liveExtractIntervalRef.current = null;
+      }
+
       if (!cid) {
+        // No conversation ID from widget — still attempt extraction;
+        // the backend can resolve the latest conversation from ElevenLabs API.
+        if (modeRef.current === 'onboarding' && !hasExtractedRef.current) {
+          window.setTimeout(() => extractAndSaveKyc(null), 2000);
+        }
         setDisconnectReason('');
         setDisconnected(true);
         return;
       }
 
-      // Always save the conversation first
-      saveConversation(modeRef.current === 'onboarding' ? 'onboarding' : 'buddy');
+      // For buddy mode, save the conversation to memory.
+      // Onboarding mode is fully handled by extractAndSaveKyc (which calls
+      // extract-kyc — that route now fetches the transcript once and saves
+      // both the KYC profile AND ConversationMemory in a single EL API call).
+      if (modeRef.current !== 'onboarding') {
+        saveConversation('buddy');
+      }
 
-      // For onboarding: attempt to extract whatever was collected
+      // For onboarding: attempt to extract whatever was collected.
+      // IMPORTANT: capture cid NOW because conversationIdRef is cleared below.
       if (modeRef.current === 'onboarding' && !hasExtractedRef.current) {
-        window.setTimeout(() => extractAndSaveKyc(), 1500);
+        const cidForExtract = cid;
+        window.setTimeout(() => extractAndSaveKyc(cidForExtract), 2000);
       }
 
       if (isGuardrail) {
@@ -225,6 +333,7 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
 
       // Show the disconnected UI with retry option
       hasExtractedRef.current = false; // allow re-extraction on retry
+      lastConversationIdRef.current = cid;
       conversationIdRef.current = null;
       setDisconnectReason(isGuardrail ? 'guardrail' : '');
       setDisconnected(true);
@@ -271,19 +380,26 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
       window.removeEventListener('beforeunload', handleBeforeUnload);
       timeoutIds.forEach((id) => window.clearTimeout(id));
 
+      // Stop live extraction interval
+      if (liveExtractIntervalRef.current) {
+        window.clearInterval(liveExtractIntervalRef.current);
+        liveExtractIntervalRef.current = null;
+      }
+
       // On unmount: save conversation, and extract KYC if onboarding
-      if (conversationIdRef.current) {
-        if (modeRef.current === 'onboarding') {
-          extractAndSaveKyc();
-        } else {
-          saveConversation(modeRef.current);
-        }
+      const unmountCid = conversationIdRef.current || lastConversationIdRef.current;
+      if (modeRef.current === 'onboarding' && !hasExtractedRef.current) {
+        extractAndSaveKyc(unmountCid);
+      } else if (unmountCid && modeRef.current !== 'onboarding') {
+        saveConversation(modeRef.current);
       }
 
       if (widget) {
         widget.removeEventListener('elevenlabs-convai:call', handleCall);
         widget.removeEventListener('elevenlabs-convai:conversation', handleMessage);
         widget.removeEventListener('elevenlabs-convai:error', handleDisconnect);
+        // Explicitly disconnect via widget API if available (frees WS on EL side)
+        try { widget.endSession?.(); } catch {}
         widget.remove();
       }
 
@@ -293,9 +409,44 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
     };
   }, [memoryLoaded, retryCount]);
 
+  // ── Reconnecting delay UI ──
+  if (reconnecting) {
+    return (
+      <div className="flex h-full w-full items-center justify-center">
+        <div className="flex flex-col items-center gap-4 max-w-md text-center px-6">
+          <div className="h-10 w-10 animate-spin rounded-full border-3 border-emerald-500 border-t-transparent" />
+          <p className="ivy-font text-base font-semibold text-foreground">Reconnecting...</p>
+          <p className="ivy-font text-sm text-muted-foreground">Freeing the previous session, just a moment.</p>
+        </div>
+      </div>
+    );
+  }
+
   // ── Disconnected UI ──
   if (disconnected) {
     const isQuotaError = disconnectReason === 'quota';
+
+    const handleRetry = async () => {
+      setReconnecting(true);
+      setDisconnected(false);
+      // Terminate previous session on ElevenLabs so the concurrent slot is freed
+      const prevCid = lastConversationIdRef.current;
+      if (prevCid) {
+        try {
+          await fetch('/api/voice-agent/end-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conversationId: prevCid }),
+          });
+        } catch {}
+        lastConversationIdRef.current = null;
+      }
+      // Wait 3 s for ElevenLabs server to release the slot before opening a new WS
+      await new Promise((r) => window.setTimeout(r, 3000));
+      setReconnecting(false);
+      setRetryCount((c) => c + 1);
+    };
+
     return (
       <div className="flex h-full w-full items-center justify-center">
         <div className="flex flex-col items-center gap-4 max-w-md text-center px-6">
@@ -305,32 +456,20 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding' }
             </svg>
           </div>
           <p className="ivy-font text-base font-semibold text-foreground">
-            {isQuotaError ? 'Voice quota exceeded' : 'Conversation interrupted'}
+            {isQuotaError ? 'Session limit reached' : 'Conversation interrupted'}
           </p>
           <p className="ivy-font text-sm text-muted-foreground">
             {isQuotaError
-              ? 'Your ElevenLabs account has reached its conversation limit. Please upgrade your plan at elevenlabs.io or try again later.'
+              ? 'ElevenLabs is holding a previous session open. Click below to close it and try again — this usually resolves itself.'
               : 'Don\'t worry — your progress has been saved. You can pick up right where you left off.'}
           </p>
           <div className="flex gap-3 mt-2">
-            {!isQuotaError && (
-              <button
-                onClick={() => setRetryCount((c) => c + 1)}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors cursor-pointer"
-              >
-                Continue Conversation
-              </button>
-            )}
-            {isQuotaError && (
-              <a
-                href="https://elevenlabs.io/subscription"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors cursor-pointer"
-              >
-                Upgrade Plan
-              </a>
-            )}
+            <button
+              onClick={handleRetry}
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors cursor-pointer"
+            >
+              {isQuotaError ? 'Close & Retry' : 'Continue Conversation'}
+            </button>
             <button
               onClick={() => onCompleteRef.current?.()}
               className="px-5 py-2.5 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:bg-muted transition-colors cursor-pointer"

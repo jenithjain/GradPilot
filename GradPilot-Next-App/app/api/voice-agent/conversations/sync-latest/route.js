@@ -23,7 +23,7 @@ export async function POST(request) {
       mode = parsed.mode || 'buddy';
     } catch {}
 
-    const agentId = process.env.ELEVENLABS_AGENT_ID || 'agent_8401kncp2mpdexkt4cwhncy0szjf';
+    const agentId = process.env.ELEVENLABS_AGENT_ID || 'agent_6301kncrnakkft1seqw159q12j6b';
 
     // Fetch the most recent conversation from ElevenLabs
     const listUrl = new URL('https://api.elevenlabs.io/v1/convai/conversations');

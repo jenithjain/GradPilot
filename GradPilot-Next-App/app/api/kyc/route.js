@@ -3,6 +3,11 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import dbConnect from '@/lib/mongodb';
 import User from '@/lib/models/User';
+import ConversationMemory from '@/lib/models/ConversationMemory';
+import {
+  buildCounsellingProgress,
+  buildCounsellingSnapshot,
+} from '@/lib/counselling-profile';
 
 export async function POST(request) {
   try {
@@ -114,16 +119,28 @@ export async function GET(request) {
     }
 
     await dbConnect();
-    
-    const user = await User.findById(session.user.id).select('studentProfile hasCompletedKYC');
+
+    const [user, latestConversation] = await Promise.all([
+      User.findById(session.user.id).select('studentProfile hasCompletedKYC updatedAt'),
+      ConversationMemory.findOne({ userId: session.user.id, mode: 'onboarding' })
+        .sort({ createdAt: -1 })
+        .select('conversationId summary extractedFacts callDurationSecs createdAt messages')
+        .lean(),
+    ]);
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
+    const studentProfile = user.studentProfile?.toObject?.() || user.studentProfile || {};
+    const counsellingProgress = buildCounsellingProgress(studentProfile);
+
     return NextResponse.json({
       hasCompletedKYC: user.hasCompletedKYC,
-      studentProfile: user.studentProfile
+      studentProfile,
+      counsellingProfile: buildCounsellingSnapshot(studentProfile),
+      counsellingProgress,
+      latestConversation: serializeConversation(latestConversation),
     });
 
   } catch (error) {
@@ -168,25 +185,18 @@ export async function PUT(request) {
 
     // Save progress — merge with existing data
     const merged = {
-      ...existingUser.studentProfile?.toObject?.() || {},
+      ...(existingUser.studentProfile?.toObject?.() || {}),
       ...kycData
     };
 
-    // Check if profile is now complete (≥5 of 6 core fields filled)
-    const coreFields = ['educationLevel', 'fieldOfStudy', 'targetCountries', 'courseInterest', 'budgetRange', 'testStatus'];
-    const filledCore = coreFields.filter((f) => {
-      const v = merged[f];
-      if (v === null || v === undefined) return false;
-      if (Array.isArray(v)) return v.length > 0;
-      return typeof v === 'string' && v.trim() !== '';
-    }).length;
-    const isNowComplete = filledCore >= 5;
+    const counsellingProgress = buildCounsellingProgress(merged);
+    const isNowComplete = existingUser.hasCompletedKYC || counsellingProgress.isComplete;
 
     const user = await User.findByIdAndUpdate(
       session.user.id,
       {
         studentProfile: merged,
-        ...(isNowComplete ? { hasCompletedKYC: true } : {}),
+        hasCompletedKYC: isNowComplete,
         updatedAt: new Date()
       },
       { new: true, runValidators: false }
@@ -197,6 +207,7 @@ export async function PUT(request) {
       message: 'Progress saved successfully',
       studentProfile: user.studentProfile,
       hasCompletedKYC: user.hasCompletedKYC,
+      counsellingProgress,
     });
 
   } catch (error) {
@@ -206,4 +217,27 @@ export async function PUT(request) {
       { status: 500 }
     );
   }
+}
+
+function serializeConversation(conversation) {
+  if (!conversation) return null;
+
+  const extractedFacts = conversation.extractedFacts instanceof Map
+    ? Object.fromEntries(conversation.extractedFacts)
+    : (conversation.extractedFacts || {});
+
+  return {
+    conversationId: conversation.conversationId,
+    summary: conversation.summary || '',
+    extractedFacts,
+    callDurationSecs: conversation.callDurationSecs || 0,
+    createdAt: conversation.createdAt,
+    messages: Array.isArray(conversation.messages)
+      ? conversation.messages.map((message) => ({
+          role: message.role,
+          message: message.message || '',
+          timeInCallSecs: message.timeInCallSecs || 0,
+        }))
+      : [],
+  };
 }

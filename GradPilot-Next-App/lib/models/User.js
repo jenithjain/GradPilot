@@ -101,6 +101,10 @@ const StudentProfileSchema = new mongoose.Schema({
 
   // Extra fields from OCR extraction
   studentName: { type: String },
+  phoneNumber: { type: String },
+  contactEmail: { type: String },
+  currentLocation: { type: String },
+  englishTestStatus: { type: String },
   rollNumber: { type: String },
   universityRegNumber: { type: String },
   dateOfBirth: { type: String },
