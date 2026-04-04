@@ -119,13 +119,54 @@ Output as a clean list. NO long explanations.\n`;
       break;
     
     case 'image':
-      prompt += `Generate 4 high quality education-themed marketing visuals for Fateh Education's student outreach campaigns. For each visual, produce a vivid composition: subject (students, graduation, university campuses, world maps, study abroad lifestyle), setting (university campus, counselling office, airport departure, student housing), camera, lighting, color palette, and style. Each image should inspire students to pursue overseas education in UK/Ireland. If this model supports direct image output, return images. Otherwise, return detailed prompts.\n`;
+      prompt += `Generate 4 professional social media marketing images for Fateh Education's student outreach campaigns. CRITICAL: Each image must be a SINGLE cohesive scene — NOT a collage, NOT a grid, NOT multiple panels. All images should share a consistent brand aesthetic (navy, gold, white palette) while varying the subject: students on campus, graduation moments, study abroad lifestyle, university buildings. Style: polished Instagram/LinkedIn ad creative. If this model supports direct image output, return images. Otherwise, return detailed prompts.\n`;
       break;
     
     case 'research':
       prompt += `Conduct research on student outreach and overseas education counselling trends. Provide CONCISE, actionable insights relevant to Fateh Education's UK/Ireland focus.
 Consider: student demographics, admission cycle timing, IELTS/PTE preparation trends, popular courses, scholarship availability, visa process updates, competitor strategies.
 LIMIT: 5-7 bullet points maximum. Be specific but brief. NO long paragraphs.\n`;
+      break;
+    
+    case 'exa_research':
+      prompt += `You are an AI Lead Research Agent with real-time web search capabilities. Your task is to analyze web research data and produce a comprehensive lead generation and market intelligence report.
+
+The web search tool has already crawled the live internet and gathered real results. Your job is to:
+
+1. **Raw Search Results**: List EVERY search result with title, URL, and 1-2 line summary — do NOT skip any results
+2. **Lead Generation**: Extract specific student leads, education consultancies, student communities, university programs, and individual contacts from the results
+3. **Market Analysis**: Analyze the education market landscape — trending courses, popular destinations, competitor strategies, student preferences
+4. **Student Needs Assessment**: Understand what prospective students want — course types, budget concerns, visa worries, scholarship needs
+5. **CSV Lead Data**: Generate a structured CSV data block that can be exported
+
+Format your output EXACTLY as:
+## 🔍 Web Research Report
+### 🛠️ Search Tool: Neural Web Search
+
+### 📡 Raw Search Results
+[List EVERY result: numbered, with **Title**, URL, and brief summary]
+
+### 📊 Market Intelligence
+[Market analysis insights with specific data from results]
+
+### 🎯 Lead Prospects
+| Name | Type | Source | Score | Notes |
+|------|------|--------|-------|-------|
+[Lead table rows — be SPECIFIC, use real names/orgs from results]
+
+### 📥 Exportable Lead Data
+\`\`\`csv
+Name,Type,Source URL,Relevance Score,Contact Info,Notes
+[CSV rows matching the table above]
+\`\`\`
+
+### 📋 Student Needs Analysis
+[What students are looking for based on the search data]
+
+### 💡 Key Takeaways
+[5-7 actionable bullet points for the campaign]
+
+Be thorough, data-driven, and reference specific URLs. Extract REAL names, organizations, and contacts from search results.\n`;
       break;
     
     case 'strategy':

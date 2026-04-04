@@ -12,51 +12,51 @@ interface VariantSpec {
   negative: string[];
 }
 
-// Predefined variant specs to force strong differentiation
+// Predefined variant specs — unified professional social media style with subtle variations
 const VARIANTS: VariantSpec[] = [
   {
-    key: 'minimal_modern',
-    theme: 'Minimalist Clean & Modern',
-    aspect: '4:5 portrait',
-    lens: '50mm prime, shallow depth of field',
-    lighting: 'soft diffused studio light, gentle falloff',
-    color: 'neutral palette, whites, soft grays, subtle accent color',
-    mood: 'calm, refined, balanced negative space',
-    styleRefs: ['contemporary editorial', 'Scandinavian product layout'],
-    negative: ['busy background', 'harsh shadows', 'overexposure', 'text distortion']
-  },
-  {
-    key: 'vibrant_pop',
-    theme: 'Vibrant Pop Art & Bold Colors',
+    key: 'hero_post',
+    theme: 'Professional Social Media Hero Post',
     aspect: '1:1 square',
-    lens: '24mm wide, crisp focus',
-    lighting: 'punchy high-key lighting with controlled highlights',
-    color: 'bold contrasting palette (teal vs coral, magenta vs yellow)',
-    mood: 'energetic, playful, high-impact',
-    styleRefs: ['pop-art poster', 'bold packaging campaign'],
-    negative: ['muddy colors', 'low contrast', 'muted saturation', 'blurry text']
+    lens: '35mm, sharp focus, clean composition',
+    lighting: 'bright natural light with soft fill, airy and inviting',
+    color: 'consistent brand palette — deep navy (#1a365d), warm gold (#d4a853), clean white, light sky blue accents',
+    mood: 'aspirational, professional, welcoming — like a top-tier education brand Instagram post',
+    styleRefs: ['professional Instagram carousel post', 'education brand social media', 'Canva pro template style'],
+    negative: ['collage layout', 'split panels', 'multiple scenes', 'busy background', 'stock photo feel', 'text distortion', 'cartoon style', 'illustration style', 'watermark']
   },
   {
-    key: 'organic_natural',
-    theme: 'Natural Organic & Earthy',
-    aspect: '16:9 landscape',
-    lens: '35mm environmental',
-    lighting: 'warm golden hour with soft rim highlights',
-    color: 'earth tones (sage, terracotta, oat, moss)',
-    mood: 'grounded, wholesome, sustainable authenticity',
-    styleRefs: ['lifestyle documentary', 'artisan brand photography'],
-    negative: ['plastic sheen', 'neon colors', 'artificial feel', 'sterile look']
+    key: 'testimonial_card',
+    theme: 'Student Success / Testimonial Card',
+    aspect: '1:1 square',
+    lens: '50mm portrait, shallow depth of field on subject',
+    lighting: 'warm studio lighting, gentle gradient background',
+    color: 'consistent brand palette — deep navy (#1a365d), warm gold (#d4a853), clean white, soft cream background',
+    mood: 'trustworthy, personal, success-oriented — like a student success story post',
+    styleRefs: ['LinkedIn announcement post', 'education testimonial card', 'professional social proof design'],
+    negative: ['collage layout', 'split panels', 'multiple scenes', 'cluttered frame', 'harsh shadows', 'neon colors', 'illustration style', 'cartoon style']
   },
   {
-    key: 'luxury_dark',
-    theme: 'Luxury Dark & Monochrome',
-    aspect: '9:16 vertical',
-    lens: '85mm portrait, compressed perspective',
-    lighting: 'dramatic low-key with controlled specular highlights',
-    color: 'rich blacks, charcoal, subtle metallic accent (gold or platinum)',
-    mood: 'elevated, exclusive, premium allure',
-    styleRefs: ['luxury fragrance campaign', 'cinematic commercial still'],
-    negative: ['flat lighting', 'washed out blacks', 'oversaturation', 'cluttered frame']
+    key: 'info_graphic',
+    theme: 'Clean Infographic / Stats Highlight',
+    aspect: '1:1 square',
+    lens: '50mm, flat lay perspective, clean grid',
+    lighting: 'even flat lighting, no harsh shadows',
+    color: 'consistent brand palette — deep navy (#1a365d), warm gold (#d4a853), white background, teal accent (#0d9488)',
+    mood: 'informative, clean, data-driven — like a professional education statistics post',
+    styleRefs: ['social media infographic', 'education stats carousel', 'modern flat design with photography'],
+    negative: ['collage layout', 'split panels', 'multiple unrelated scenes', 'vintage filter', 'grunge texture', 'hand-drawn style', 'clipart']
+  },
+  {
+    key: 'cta_banner',
+    theme: 'Call-to-Action Banner / Promo Post',
+    aspect: '1:1 square',
+    lens: '24mm wide, environmental context, campus or travel backdrop',
+    lighting: 'golden hour warmth with soft bokeh background',
+    color: 'consistent brand palette — deep navy (#1a365d), warm gold (#d4a853), emerald green (#059669), white text overlays',
+    mood: 'urgent, motivating, action-oriented — like a limited-time offer education post',
+    styleRefs: ['Instagram ad creative', 'Facebook sponsored education post', 'professional CTA banner'],
+    negative: ['collage layout', 'split panels', 'multiple scenes', 'low quality', 'blurry', 'oversaturated', 'meme style', 'clip art']
   }
 ];
 
@@ -73,7 +73,7 @@ export interface GeneratedImageMeta {
 
 // Build a rich prompt for a variant
 function buildVariantPrompt(basePrompt: string, v: VariantSpec): string {
-  return `${basePrompt}\n\nIMAGE VARIANT SPEC (${v.key.toUpperCase()}):\nTheme: ${v.theme}\nDesired Aspect Ratio: ${v.aspect} (if supported)\nLens & Optics: ${v.lens}\nLighting: ${v.lighting}\nColor Direction: ${v.color}\nMood & Atmosphere: ${v.mood}\nArt / Style References: ${v.styleRefs.join(', ')}\nComposition Guidance: Emphasize hierarchy, product clarity, and intentional focal points.\nTypography Overlay: Provide clean space for headline + subline + CTA, avoid distortion.\nTechnical Quality: Ultra sharp subject, clean edges, natural gradients, no artifacts.\nNegative / Avoid: ${v.negative.join(', ')}\nReturn ONLY the raw image. No captions, no explanation.`;
+  return `${basePrompt}\n\nIMAGE VARIANT SPEC (${v.key.toUpperCase()}):\nTheme: ${v.theme}\nDesired Aspect Ratio: ${v.aspect} (if supported)\nLens & Optics: ${v.lens}\nLighting: ${v.lighting}\nColor Direction: ${v.color}\nMood & Atmosphere: ${v.mood}\nArt / Style References: ${v.styleRefs.join(', ')}\nComposition Guidance: Single cohesive scene (NOT a collage or grid). One clean focal point, professional social media post layout with space for text overlay.\nTypography Overlay: Provide clean space for headline + subline + CTA, avoid distortion.\nCRITICAL STYLE RULES:\n- Generate a SINGLE unified image, NOT a collage, NOT a grid, NOT multiple panels\n- Professional social media marketing style (like Instagram/LinkedIn ad creatives)\n- Consistent brand feel across all variants — same color family, same professional tone\n- Photorealistic with clean modern design elements\nTechnical Quality: Ultra sharp subject, clean edges, natural gradients, no artifacts.\nNegative / Avoid: ${v.negative.join(', ')}\nReturn ONLY the raw image. No captions, no explanation.`;
 }
 
 // Generate four images with structured variant prompts

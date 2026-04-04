@@ -55,6 +55,117 @@ export async function POST(request: Request) {
     // Compile the final prompt
     let finalPrompt = compilePrompt(context);
 
+    // Exa.ai Web Research node - searches web then analyzes with Gemini
+    if (context.nodeType === 'exa_research') {
+      try {
+        // Step 1: Build search queries from campaign context using Gemini
+        const queryModel = getFlashModel();
+        const queryPrompt = `Based on the following campaign context, generate 4-5 specific web search queries to find INDIVIDUAL student leads, student communities, education consultancies, and market intelligence.
+
+Focus on finding:
+- Individual students looking to study abroad (forums, LinkedIn posts, Reddit threads, student blogs)
+- Student communities and groups (Facebook groups, WhatsApp communities, Discord servers)
+- Education fair attendees and registrants
+- Competitor consultancy websites and their student testimonials
+- University admission pages with intake information
+
+Campaign Brief: ${brief}
+Strategy: ${strategy}
+
+Return ONLY a JSON array of search query strings. Make queries specific with names, locations, platforms. Example: ["Indian students looking for UK university admission 2025 Reddit", "study abroad consultancy reviews students India"]`;
+
+        const queryResponse = await generateWithRetry(queryModel, queryPrompt);
+        let searchQueries: string[];
+        try {
+          const cleaned = queryResponse.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, '');
+          searchQueries = JSON.parse(cleaned);
+          if (!Array.isArray(searchQueries)) throw new Error('Not an array');
+        } catch {
+          // Fallback queries based on brief
+          searchQueries = [
+            `${brief.substring(0, 80)} student leads education`,
+            'students looking to study abroad UK Ireland 2025 forums',
+            'overseas education consultancy student testimonials reviews',
+            'study abroad student community groups India UK',
+          ];
+        }
+
+        console.log('[exa_research] Search queries:', searchQueries);
+
+        // Step 2: Call Exa.ai for each query category
+        const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        
+        // People search for student leads
+        const peopleRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queries: searchQueries.slice(0, 2), category: 'people', numResults: 10 }),
+        });
+        const peopleData = await peopleRes.json();
+
+        // Company search for institutions/competitors
+        const companyRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queries: searchQueries.slice(0, 2), category: 'company', numResults: 10 }),
+        });
+        const companyData = await companyRes.json();
+
+        // News/general search for market intelligence
+        const newsRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queries: searchQueries, numResults: 10 }),
+        });
+        const newsData = await newsRes.json();
+
+        // Step 3: Compile all Exa results
+        const allResults = [
+          ...(peopleData.results || []),
+          ...(companyData.results || []),
+          ...(newsData.results || []),
+        ];
+
+        const allTraces = [
+          ...(peopleData.toolTrace || []),
+          ...(companyData.toolTrace || []),
+          ...(newsData.toolTrace || []),
+        ];
+
+        console.log(`[exa_research] Total Exa results: ${allResults.length}`);
+
+        // Step 4: Build enriched prompt with Exa data
+        const exaContext = allResults.map((r: any, i: number) => {
+          const highlights = (r.highlights || []).join(' ').substring(0, 500);
+          return `[${i + 1}] ${r.title}\n    URL: ${r.url}\n    ${r.author ? `Author: ${r.author}\n    ` : ''}${r.publishedDate ? `Date: ${r.publishedDate}\n    ` : ''}Summary: ${highlights}`;
+        }).join('\n\n');
+
+        const enrichedPrompt = finalPrompt + `\n\n--- REAL-TIME WEB SEARCH RESULTS ---\nTool: Neural Web Search API\nQueries Used: ${searchQueries.join(' | ')}\nTotal Results Found: ${allResults.length}\n\n${exaContext}\n\n--- END OF SEARCH RESULTS ---\n\nIMPORTANT INSTRUCTIONS:\n1. Analyze ALL the above search results thoroughly\n2. In your output, include a "Raw Search Results" section that lists EVERY result with its title, URL, and a 1-2 line summary\n3. Generate a CSV-formatted lead list inside a \`\`\`csv code block with columns: Name,Type,Source URL,Relevance Score,Contact Info,Notes\n4. Be specific — name real people, real organizations, real URLs from the results\n5. Reference specific data points and URLs throughout your analysis`;
+
+        // Step 5: Generate analysis with Gemini
+        const textModel = getFlashModel();
+        const analysis = await generateWithRetry(textModel, enrichedPrompt);
+
+        // Step 6: Prepend tool trace to output
+        const toolTraceBlock = `### 🛠️ Web Search Tool Calls\n${allTraces.map(t => `\`${t}\``).join('\n')}\n\n---\n\n`;
+
+        response = NextResponse.json({
+          success: true,
+          output: toolTraceBlock + analysis,
+          nodeId,
+        });
+        return response;
+      } catch (err: any) {
+        console.error('[exa_research] Error:', err);
+        response = NextResponse.json({
+          success: true,
+          output: `⚠️ Web research failed: ${err.message}. Falling back to general research.`,
+          nodeId,
+        });
+        return response;
+      }
+    }
+
     // LinkedIn and Twitter node integration - generate content first, then post
     if (context.nodeType === 'linkedin' || context.nodeType === 'twitter') {
       const textModel = getFlashModel();
@@ -440,14 +551,14 @@ Team Fateh Education`;
 
     // If image node, enforce ad creative style with CTA overlays
     if (context.nodeType === 'image') {
-      finalPrompt += `\n\nAD CREATIVE REQUIREMENTS:\n- Generate EXACTLY 4 education-themed ad image concepts with COMPLETELY DIFFERENT themes and aesthetics.\n- Each image must have a distinct visual style, color palette, mood, and composition - no similarities.\n- Subject matter: students on campus, graduation moments, study abroad lifestyle, university buildings, world maps, counselling sessions, diverse student groups.\n- Each image should feel like a polished marketing asset for a study abroad consultancy.\n- Integrate concise overlay text: headline (max 6 words) + subline (max 10 words).\n- Include a clear call-to-action phrase variant: "Book Free Counselling", "Start Your Journey", "Apply Now", "Check Eligibility".\n- Use clean readable typography, high contrast, and leave safe margins around text.\n- Return only raw images (no descriptive paragraphs).`;
+      finalPrompt += `\n\nAD CREATIVE REQUIREMENTS:\n- Generate EXACTLY 4 professional social media marketing images for an education consultancy.\n- ALL images must share a CONSISTENT brand identity: same color palette (navy, gold, white), same professional tone, same modern clean aesthetic.\n- Each image should be a SINGLE cohesive scene — NOT a collage, NOT a grid, NOT multiple panels stitched together.\n- Vary the CONTENT (different subjects: campus, students, graduation, travel) but keep the STYLE unified and professional.\n- Subject matter: students on campus, graduation moments, study abroad lifestyle, university buildings, counselling sessions, diverse student groups.\n- Each image should look like a polished Instagram/LinkedIn ad creative for a premium study abroad consultancy.\n- Integrate concise overlay text: headline (max 6 words) + subline (max 10 words).\n- Include a clear call-to-action phrase: "Book Free Counselling", "Start Your Journey", "Apply Now", "Check Eligibility".\n- Use clean readable typography, high contrast, and leave safe margins around text.\n- Return only raw images (no descriptive paragraphs).`;
     }
 
     if (context.nodeType === 'image') {
       // Enhanced image generation using structured variant specs
       try {
         console.log('[execute-node] Starting image generation for node:', nodeId);
-        const baseImagePrompt = finalPrompt + `\n\nGLOBAL IMAGE QUALITY REQUIREMENTS:\n- Photorealistic fidelity (unless style suggests illustration)\n- Crisp edges, no artifacts, no mangled text\n- Provide clean negative space for overlay text (headline + subline + CTA)\n- Distinct aesthetic separation between variants (no repetition)\n- Focus on education, campus life, diversity, and aspiration\n- Avoid generic stock look, aim for art-directed education campaign visuals.`;
+        const baseImagePrompt = finalPrompt + `\n\nGLOBAL IMAGE QUALITY REQUIREMENTS:\n- Photorealistic fidelity, professional social media marketing style\n- Each image is a SINGLE unified scene — absolutely NO collages, NO grids, NO split panels, NO multi-image layouts\n- All 4 images must feel like part of the SAME campaign — consistent brand colors (navy, gold, white), consistent professional tone\n- Crisp edges, no artifacts, no mangled text\n- Provide clean negative space for overlay text (headline + subline + CTA)\n- Different subjects/content per image but SAME visual brand identity\n- Focus on education, campus life, diversity, and aspiration\n- Style reference: Premium Instagram ad carousel for a top education brand.`;
         
         console.log('[execute-node] Calling generateCampaignImages...');
         const generated = await generateCampaignImages(baseImagePrompt);

@@ -19,7 +19,8 @@ import {
   X,
   ZoomIn,
   Mail,
-  Upload
+  Upload,
+  Globe
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -31,6 +32,7 @@ const iconMap = {
   copy: FileText,
   image: ImageIcon,
   research: Search,
+  exa_research: Globe,
   timeline: Calendar,
   distribution: Send,
   linkedin: Send,
@@ -43,6 +45,7 @@ const typeColorMap = {
   copy: 'bg-orange-500/10 border-orange-500/30',
   image: 'bg-pink-500/10 border-pink-500/30',
   research: 'bg-green-500/10 border-green-500/30',
+  exa_research: 'bg-cyan-500/10 border-cyan-500/30',
   timeline: 'bg-red-500/10 border-red-500/30',
   distribution: 'bg-indigo-500/10 border-indigo-500/30',
   linkedin: 'bg-blue-700/10 border-blue-700/30',
@@ -62,6 +65,7 @@ const badgeLabelMap = {
   copy: 'Creative',
   image: 'Creative',
   research: 'Research',
+  exa_research: 'Web Research',
   timeline: 'Strategy',
   distribution: 'Scheduling',
   communication: 'Communication',
@@ -122,6 +126,41 @@ function AgentNode({ data, id }) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleExportCSV = () => {
+    if (!data.output) return;
+    // Extract CSV block from output (between ```csv and ```)
+    const csvMatch = data.output.match(/```csv\n([\s\S]*?)```/);
+    if (csvMatch) {
+      const blob = new Blob([csvMatch[1].trim()], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `web-research-leads-${id.substring(0, 8)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return;
+    }
+    // Fallback: extract markdown table rows and convert to CSV
+    const lines = data.output.split('\n');
+    const tableLines = lines.filter(l => l.startsWith('|') && !l.match(/^\|\s*[-:]+/));
+    if (tableLines.length > 0) {
+      const csv = tableLines.map(line => 
+        line.split('|').filter(c => c.trim()).map(c => `"${c.trim().replace(/"/g, '""')}"`).join(',')
+      ).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `web-research-leads-${id.substring(0, 8)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
   };
 
   const handleCSVUpload = async (event) => {
@@ -220,7 +259,7 @@ function AgentNode({ data, id }) {
                   <span className="text-emerald-600 dark:text-emerald-400">Active</span>
                 </Badge>
               </div>
-              <h3 className="font-semibold text-foreground text-sm truncate">{data.label}</h3>
+              <h3 className="font-semibold text-foreground text-sm truncate">{data.type === 'exa_research' ? data.label?.replace(/Exa\.?ai\s*/gi, '').replace(/^\s*Web/i, 'Web') || 'Web Research Agent' : data.label}</h3>
             </div>
             <Button
               variant="ghost"
@@ -322,6 +361,15 @@ function AgentNode({ data, id }) {
 
           {data.status === 'idle' && (
             <div className="text-xs text-muted-foreground">
+              {data.type === 'exa_research' && (
+                <div className="mb-2 p-2 border border-cyan-500/20 rounded-md bg-cyan-500/5">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Globe className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+                    <span className="text-[10px] font-semibold text-cyan-600 dark:text-cyan-400">Live Web Search Agent</span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">Searches the web for leads, market data & competitor insights. Generates downloadable CSV.</p>
+                </div>
+              )}
               <p className="leading-relaxed">{data.promptContext || 'Ready to generate content based on campaign strategy.'}</p>
             </div>
           )}
@@ -329,7 +377,9 @@ function AgentNode({ data, id }) {
           {data.status === 'loading' && (
             <div className="flex flex-col items-center justify-center py-6 gap-2">
               <Loader2 className="w-6 h-6 animate-spin text-primary" />
-              <p className="text-xs text-muted-foreground">Generating content...</p>
+              <p className="text-xs text-muted-foreground">
+                {data.type === 'exa_research' ? 'Searching the web for leads & insights...' : 'Generating content...'}
+              </p>
             </div>
           )}
 
@@ -399,23 +449,36 @@ function AgentNode({ data, id }) {
           )}
 
           {data.status === 'complete' && (
-            <div className="flex gap-2">
-              <Button
-                onClick={data.openSettings}
-                variant="outline"
-                size="sm"
-                className="flex-1 h-7 text-xs"
-              >
-                Edit
-              </Button>
-              <Button
-                onClick={handleRunAgent}
-                variant="outline"
-                size="sm"
-                className="flex-1 h-7 text-xs"
-              >
-                Regenerate
-              </Button>
+            <div className="flex flex-col gap-2">
+              {data.type === 'exa_research' && (
+                <Button
+                  onClick={handleExportCSV}
+                  variant="outline"
+                  size="sm"
+                  className="w-full h-7 text-xs border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+                >
+                  <Download className="w-3 h-3 mr-1.5" />
+                  Export Leads CSV
+                </Button>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  onClick={data.openSettings}
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 h-7 text-xs"
+                >
+                  Edit
+                </Button>
+                <Button
+                  onClick={handleRunAgent}
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 h-7 text-xs"
+                >
+                  Regenerate
+                </Button>
+              </div>
             </div>
           )}
         </div>
