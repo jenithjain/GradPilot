@@ -116,12 +116,8 @@ export default function LoginPage() {
         
         // Small delay for better UX
         setTimeout(() => {
-          // For new signups: students go to onboarding, counsellors go to dashboard
-          if (!isLogin) {
-            router.push(formData.role === 'counsellor' ? "/dashboard" : "/onboarding");
-          } else {
-            router.push("/dashboard");
-          }
+          // Always go to dashboard after signup/signin — onboarding is initiated from the dashboard
+          router.push("/dashboard");
           router.refresh();
         }, 500);
       }
@@ -139,7 +135,7 @@ export default function LoginPage() {
     try {
       // Pass a custom callbackUrl that we'll handle in the callback
       await signIn("google", { 
-        callbackUrl: "/onboarding" // Default to onboarding, will be redirected if KYC complete
+        callbackUrl: "/dashboard"
       });
     } catch (err) {
       console.error("Google auth error:", err);
