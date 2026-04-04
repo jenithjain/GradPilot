@@ -101,6 +101,10 @@ const StudentProfileSchema = new mongoose.Schema({
 
   // Extra fields from OCR extraction
   studentName: { type: String },
+  phoneNumber: { type: String },
+  contactEmail: { type: String },
+  currentLocation: { type: String },
+  englishTestStatus: { type: String },
   rollNumber: { type: String },
   universityRegNumber: { type: String },
   dateOfBirth: { type: String },
@@ -110,6 +114,34 @@ const StudentProfileSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   }
+}, { _id: false });
+
+const DashboardAnalysisSchema = new mongoose.Schema({
+  profileFingerprint: {
+    type: String,
+    default: null,
+  },
+  missingFields: {
+    type: [String],
+    default: [],
+  },
+  source: {
+    type: String,
+    enum: ['gemini', 'local'],
+    default: 'local',
+  },
+  model: {
+    type: String,
+    default: 'local-rules',
+  },
+  generatedAt: {
+    type: Date,
+    default: Date.now,
+  },
+  analysis: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
 }, { _id: false });
 
 /**
@@ -166,6 +198,12 @@ const UserSchema = new mongoose.Schema({
   hasCompletedKYC: {
     type: Boolean,
     default: false
+  },
+
+  // Persisted AI dashboard analysis so refreshes don't repeatedly call Gemini
+  dashboardAnalysis: {
+    type: DashboardAnalysisSchema,
+    default: null,
   },
   
   // Social Media Tokens

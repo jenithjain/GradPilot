@@ -16,7 +16,13 @@ interface CampaignStore {
   setBrief: (brief: string) => void;
   setStrategy: (strategy: CampaignStrategy) => void;
   setWorkflow: (nodes: WorkflowNode[], edges: WorkflowEdge[]) => void;
-  updateNodeStatus: (nodeId: string, status: 'idle' | 'loading' | 'complete' | 'error', output?: string, error?: string) => void;
+  updateNodeStatus: (
+    nodeId: string,
+    status: 'idle' | 'loading' | 'complete' | 'error',
+    output?: string,
+    error?: string,
+    metadata?: Record<string, any>
+  ) => void;
   updateNodeData: (nodeId: string, data: Partial<WorkflowNode['data']>) => void;
   updateEdgeTransferLogic: (edgeId: string, newLogic: string) => void;
   updateNodePrompt: (nodeId: string, prompt: string) => void;
@@ -45,7 +51,7 @@ export const useCampaignStore = create<CampaignStore>()(
 
   setWorkflow: (nodes, edges) => set({ nodes, edges }),
 
-  updateNodeStatus: (nodeId, status, output, error) =>
+  updateNodeStatus: (nodeId, status, output, error, metadata) =>
     set((state) => ({
       nodes: state.nodes.map((node) =>
         node.id === nodeId
@@ -56,6 +62,7 @@ export const useCampaignStore = create<CampaignStore>()(
                 status,
                 output: output !== undefined ? output : node.data.output,
                 error: error !== undefined ? error : node.data.error,
+                metadata: metadata !== undefined ? metadata : node.data.metadata,
               },
             }
           : node

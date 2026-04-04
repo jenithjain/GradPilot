@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import dynamic from 'next/dynamic';
 import StaggeredMenu from '@/components/StaggeredMenu';
 const AICounsellingDashboard = dynamic(() => import('@/components/AICounsellingDashboard'), { ssr: false, loading: () => null });
+const ElevenLabsVoiceAgent = dynamic(() => import('@/components/ElevenLabsVoiceAgent'), { ssr: false });
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -21,7 +22,7 @@ import {
 import {
   Loader2, ChevronRight, ChevronLeft, CheckCircle2,
   User, GraduationCap, Globe, BookOpen, DollarSign,
-  MessageSquare, BarChart2, Sparkles,
+  MessageSquare, BarChart2, Sparkles, X,
 } from 'lucide-react';
 
 // ── Step definitions ─────────────────────────────────────────────────────────
@@ -465,6 +466,7 @@ export default function OnboardingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [menuBtnColor, setMenuBtnColor] = useState('#000000');
   const [avatar, setAvatar] = useState(null);
+  const [voiceMode, setVoiceMode] = useState(false);
   const [data, setData] = useState({
     // Basic
     fullName: '', phone: '', email: '', city: '',
@@ -486,6 +488,11 @@ export default function OnboardingPage() {
       const stored = localStorage.getItem('selectedAvatar');
       if (stored) setAvatar(JSON.parse(stored));
     } catch {}
+    // Check if voice mode was requested
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('mode') === 'voice') {
+      setVoiceMode(true);
+    }
   }, []);
 
   // Theme color sync
@@ -619,7 +626,25 @@ export default function OnboardingPage() {
 
       <div className="relative flex min-h-screen items-start justify-center p-4 pt-24 pb-16">
         <div className={`w-full ${done ? 'max-w-7xl' : 'max-w-2xl'}`}>
-          {done ? (
+          {voiceMode && !done ? (
+            <div className="fixed inset-0 z-9999 bg-black/80 backdrop-blur-sm">
+              <button
+                type="button"
+                onClick={() => setVoiceMode(false)}
+                className="absolute right-4 top-4 z-10 rounded-full border border-white/20 bg-black/60 p-2 text-white shadow-lg transition-colors hover:bg-black/80"
+                aria-label="Close voice agent"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <ElevenLabsVoiceAgent
+                mode="onboarding"
+                onComplete={() => {
+                  setVoiceMode(false);
+                  setDone(true);
+                }}
+              />
+            </div>
+          ) : done ? (
             <FinalDashboard data={data} avatar={avatar} onRestart={() => { setDone(false); setStep(0); }} />
           ) : (
             <>

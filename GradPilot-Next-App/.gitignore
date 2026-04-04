@@ -43,3 +43,8 @@ next-env.d.ts
 # temp assets (runtime-generated images)
 /tmp/
 /tmp/**
+
+# local observability logs
+/agent-logs/**/*.log
+/agent-logs/workflows/web-research-cache/*.json
+!/agent-logs/**/.gitkeep

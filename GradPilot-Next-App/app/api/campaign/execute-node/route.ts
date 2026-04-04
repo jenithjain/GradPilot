@@ -9,16 +9,221 @@ import { authOptions } from '@/lib/auth-options';
 import dbConnect from '@/lib/mongodb';
 import User from '@/lib/models/User';
 import { logAuditEvent } from '@/lib/audit-logger';
+import {
+  appendObservabilityLog,
+  ensureObservabilityFolders,
+  readLatestWebResearchSnapshot,
+  saveWebResearchSnapshot,
+} from '@/lib/agent-observability';
+
+type EmailRecipient = { email: string; name?: string };
+type CsvLeadRow = {
+  name?: string;
+  type?: string;
+  email?: string;
+  contactInfo?: string;
+};
+type EmailTemplate = { subject: string; html: string; text?: string };
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EXCLUDED_BROADCAST_TYPES = new Set(['community', 'competitor']);
+
+function normalizeEmail(email: string): string {
+  return String(email || '').trim().toLowerCase();
+}
+
+function isValidLeadEmail(email: string): boolean {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  if (!EMAIL_REGEX.test(normalized)) return false;
+  if (normalized.includes('(inferred)')) return false;
+  if (normalized.includes('see url')) return false;
+  return true;
+}
+
+function dedupeRecipients(recipients: EmailRecipient[]): EmailRecipient[] {
+  const seen = new Set<string>();
+  const unique: EmailRecipient[] = [];
+
+  for (const recipient of recipients) {
+    const normalizedEmail = normalizeEmail(recipient.email);
+    if (!isValidLeadEmail(normalizedEmail) || seen.has(normalizedEmail)) {
+      continue;
+    }
+
+    seen.add(normalizedEmail);
+    unique.push({
+      email: normalizedEmail,
+      name: recipient.name?.trim() || undefined,
+    });
+  }
+
+  return unique;
+}
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (const ch of line) {
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      values.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  values.push(current.trim());
+
+  return values;
+}
+
+function normalizeLeadType(type?: string): string {
+  return String(type || '').trim().toLowerCase();
+}
+
+function parseCsvLeadRows(output: string): CsvLeadRow[] {
+  if (!output) return [];
+
+  const csvMatch = output.match(/```csv\s*([\s\S]*?)```/i);
+  if (!csvMatch) return [];
+
+  const csvContent = csvMatch[1].trim();
+  const lines = csvContent.split('\n').filter(line => line.trim());
+  if (lines.length <= 1) return [];
+
+  const header = lines[0].toLowerCase();
+  const cols = header.split(',').map(col => col.replace(/"/g, '').trim());
+
+  const emailColIdx = cols.findIndex(col => col === 'email');
+  const contactColIdx = cols.findIndex(col => col === 'contact info');
+  const nameColIdx = cols.findIndex(col => col === 'name');
+  const typeColIdx = cols.findIndex(col => col === 'type');
+
+  if (emailColIdx === -1 && contactColIdx === -1) return [];
+
+  const rows: CsvLeadRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCsvLine(lines[i]);
+
+    let email = '';
+    if (emailColIdx !== -1) {
+      email = values[emailColIdx]?.replace(/"/g, '').trim() || '';
+    }
+    if (!email && contactColIdx !== -1) {
+      const contact = values[contactColIdx]?.replace(/"/g, '').trim() || '';
+      if (contact.includes('@')) {
+        email = contact;
+      }
+    }
+
+    const name = nameColIdx !== -1 ? values[nameColIdx]?.replace(/"/g, '').trim() : undefined;
+    const type = typeColIdx !== -1 ? values[typeColIdx]?.replace(/"/g, '').trim() : undefined;
+    const contactInfo = contactColIdx !== -1 ? values[contactColIdx]?.replace(/"/g, '').trim() : undefined;
+
+    rows.push({ name, type, email, contactInfo });
+  }
+
+  return rows;
+}
+
+function extractRecipientsFromCsvOutput(
+  output: string,
+  options: { studentOnly?: boolean; excludeTypes?: Set<string> } = {}
+): EmailRecipient[] {
+  const rows = parseCsvLeadRows(output);
+  const recipients: EmailRecipient[] = [];
+
+  for (const row of rows) {
+    const typeNormalized = normalizeLeadType(row.type);
+
+    if (options.studentOnly && typeNormalized && !typeNormalized.includes('student')) {
+      continue;
+    }
+    if (options.excludeTypes && options.excludeTypes.has(typeNormalized)) {
+      continue;
+    }
+
+    const bestEmail = row.email || row.contactInfo || '';
+    if (isValidLeadEmail(bestEmail)) {
+      recipients.push({ email: bestEmail, name: row.name || undefined });
+    }
+  }
+
+  return dedupeRecipients(recipients);
+}
+
+function extractRecipientsFromNodeMetadata(node: WorkflowNode, key: string = 'leadsWithEmail'): EmailRecipient[] {
+  const metadataLeads = (node.data as any)?.metadata?.[key];
+  if (!Array.isArray(metadataLeads)) return [];
+
+  const mapped = metadataLeads.map((lead: any) => ({
+    email: lead?.email,
+    name: lead?.name,
+  }));
+
+  return dedupeRecipients(mapped);
+}
+
+function normalizeEmailSequence(input: any): EmailTemplate[] {
+  const candidates: any[] = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.sequence)
+      ? input.sequence
+      : Array.isArray(input?.emails)
+        ? input.emails
+        : input
+          ? [input]
+          : [];
+
+  return candidates
+    .map((item) => {
+      const subject = String(item?.subject || '').trim();
+      const html = String(item?.html || '').trim();
+      const text = String(item?.text || '').trim();
+      if (!subject || !html) return null;
+      return {
+        subject,
+        html,
+        text: text || undefined,
+      } as EmailTemplate;
+    })
+    .filter(Boolean) as EmailTemplate[];
+}
 
 export async function POST(request: Request) {
   const startTime = Date.now();
   let session: any = null;
   let response: Response | null = null;
   let error: Error | null = null;
+  let requestPayload: any = null;
+  let executionSummary: Record<string, any> = {};
+  let runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  let workflowRunId = '';
 
   try {
+    await ensureObservabilityFolders();
     session = await getServerSession(authOptions as any);
-    const { nodeId, nodes, edges, brief, strategy } = await request.json();
+    requestPayload = await request.json();
+    const { nodeId, nodes, edges, brief, strategy } = requestPayload;
+    workflowRunId = String(requestPayload?.workflowRunId || `wf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    runId = `run_${String(nodeId || 'node')}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    executionSummary = {
+      runId,
+      workflowRunId,
+      nodeId,
+      nodeCount: Array.isArray(nodes) ? nodes.length : 0,
+      edgeCount: Array.isArray(edges) ? edges.length : 0,
+    };
+    console.log('[agent-run] start', executionSummary);
+    appendObservabilityLog('unified-executor', {
+      event: 'node_execution_started',
+      ...executionSummary,
+    });
 
     // Validate input
     if (!nodeId || !nodes || !edges || !brief || !strategy) {
@@ -52,27 +257,88 @@ export async function POST(request: Request) {
       kyc
     );
 
+    // If email node has no explicit incoming edge context, auto-attach completed node outputs
+    // so the email content can still use upstream strategy/research/copy information.
+    if (context.nodeType === 'email' && context.incomingEdges.length === 0) {
+      const fallbackContexts = (nodes as WorkflowNode[])
+        .filter(n => n.id !== nodeId && n.data?.status === 'complete' && !!n.data?.output)
+        .slice(0, 4)
+        .map(n => ({
+          sourceNodeId: n.id,
+          sourceOutput: String(n.data.output),
+          transferLogic: 'Auto-fallback context from completed upstream node output.',
+          edgeLabel: `Auto Context (${n.data?.label || n.id})`,
+        }));
+
+      if (fallbackContexts.length > 0) {
+        context.incomingEdges.push(...fallbackContexts);
+      }
+    }
+    executionSummary.nodeType = context.nodeType;
+
     // Compile the final prompt
     let finalPrompt = compilePrompt(context);
+    appendObservabilityLog('ai-sdk-executor', {
+      event: 'prompt_compiled',
+      runId,
+      workflowRunId,
+      nodeId,
+      nodeType: context.nodeType,
+      promptLength: finalPrompt.length,
+      incomingEdgeCount: context.incomingEdges.length,
+    });
+    appendObservabilityLog('ai-provider', {
+      event: 'model_execution_requested',
+      runId,
+      workflowRunId,
+      nodeId,
+      nodeType: context.nodeType,
+    });
 
     // Exa.ai Web Research node - searches web then analyzes with Gemini
     if (context.nodeType === 'exa_research') {
       try {
-        // Step 1: Build search queries from campaign context using Gemini
-        const queryModel = getFlashModel();
-        const queryPrompt = `Based on the following campaign context, generate 4-5 specific web search queries to find INDIVIDUAL student leads, student communities, education consultancies, and market intelligence.
+        // Get filter options from node data (checkboxes)
+        const node = (nodes as WorkflowNode[]).find(n => n.id === nodeId);
+        const nodeData = node?.data as any;
+        const filters = {
+          studentLeads: nodeData?.filters?.studentLeads !== false, // Default true
+          linkedInProfiles: nodeData?.filters?.linkedInProfiles !== false,
+          communities: nodeData?.filters?.communities !== false,
+          competitors: nodeData?.filters?.competitors !== false,
+          redditUsers: nodeData?.filters?.redditUsers !== false,
+        };
+        
+        console.log('[exa_research] Active filters:', filters);
 
-Focus on finding:
-- Individual students looking to study abroad (forums, LinkedIn posts, Reddit threads, student blogs)
-- Student communities and groups (Facebook groups, WhatsApp communities, Discord servers)
-- Education fair attendees and registrants
-- Competitor consultancy websites and their student testimonials
-- University admission pages with intake information
+        // Step 1: Build COMPREHENSIVE search queries
+        const queryModel = getFlashModel();
+        const queryPrompt = `You are a Lead Generation Expert for Fateh Education (overseas education consultancy).
 
 Campaign Brief: ${brief}
 Strategy: ${strategy}
 
-Return ONLY a JSON array of search query strings. Make queries specific with names, locations, platforms. Example: ["Indian students looking for UK university admission 2025 Reddit", "study abroad consultancy reviews students India"]`;
+Generate EXACTLY 6 HIGHLY TARGETED search queries to find REAL people with ACTUAL contact information:
+
+1. **Student Leads on Reddit** - Find students actively asking for help
+   "site:reddit.com (scholarship OR UK university OR masters abroad OR study in UK) Indian student 2025 2026"
+
+2. **LinkedIn Alumni/Professionals** - UK university graduates from India
+   "site:linkedin.com/in (MSc OR MBA OR Masters) (UK OR London OR Russell Group) Indian"
+
+3. **LinkedIn Education Consultants** - Competitors to analyze
+   "site:linkedin.com/in (education consultant OR study abroad advisor) UK India"
+
+4. **Reddit Study Abroad Communities** - For market research
+   "site:reddit.com/r (studyabroad OR Indians_StudyAbroad OR UniUK OR ukvisa)"
+
+5. **Competitor Websites** - With contact info
+   "(overseas education consultant OR UK admission consultant) India contact email phone +91"
+
+6. **High-Intent Student Posts** - Students seeking specific guidance
+   "site:reddit.com scholarship UK university Indian student need help advice"
+
+Return ONLY a JSON array of 6 query strings.`;
 
         const queryResponse = await generateWithRetry(queryModel, queryPrompt);
         let searchQueries: string[];
@@ -81,85 +347,427 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
           searchQueries = JSON.parse(cleaned);
           if (!Array.isArray(searchQueries)) throw new Error('Not an array');
         } catch {
-          // Fallback queries based on brief
           searchQueries = [
-            `${brief.substring(0, 80)} student leads education`,
-            'students looking to study abroad UK Ireland 2025 forums',
-            'overseas education consultancy student testimonials reviews',
-            'study abroad student community groups India UK',
+            'site:reddit.com (scholarship OR UK university OR masters) Indian student 2025 2026 need help',
+            'site:linkedin.com/in (MSc OR MBA OR Masters) (UK OR London OR Imperial OR LSE) Indian',
+            'site:linkedin.com/in (education consultant OR study abroad advisor) UK India',
+            'site:reddit.com/r (studyabroad OR Indians_StudyAbroad OR UniUK OR ukvisa)',
+            '(overseas education consultant OR UK admission) India contact email +91',
+            'site:reddit.com UK university scholarship Indian student advice funding',
           ];
         }
 
         console.log('[exa_research] Search queries:', searchQueries);
 
-        // Step 2: Call Exa.ai for each query category
+        // Step 2: Execute searches with maximum results
         const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
         
-        // People search for student leads
-        const peopleRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
+        const searchRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: searchQueries.slice(0, 2), category: 'people', numResults: 10 }),
+          body: JSON.stringify({ 
+            queries: searchQueries,
+            numResults: 20, // Get more results per query
+            includeText: true
+          }),
         });
-        const peopleData = await peopleRes.json();
+        const searchData = await searchRes.json();
 
-        // Company search for institutions/competitors
-        const companyRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: searchQueries.slice(0, 2), category: 'company', numResults: 10 }),
-        });
-        const companyData = await companyRes.json();
-
-        // News/general search for market intelligence
-        const newsRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: searchQueries, numResults: 10 }),
-        });
-        const newsData = await newsRes.json();
-
-        // Step 3: Compile all Exa results
-        const allResults = [
-          ...(peopleData.results || []),
-          ...(companyData.results || []),
-          ...(newsData.results || []),
-        ];
-
-        const allTraces = [
-          ...(peopleData.toolTrace || []),
-          ...(companyData.toolTrace || []),
-          ...(newsData.toolTrace || []),
-        ];
+        const allResults = searchData.results || [];
+        const allTraces = searchData.toolTrace || [];
 
         console.log(`[exa_research] Total Exa results: ${allResults.length}`);
 
-        // Step 4: Build enriched prompt with Exa data
-        const exaContext = allResults.map((r: any, i: number) => {
-          const highlights = (r.highlights || []).join(' ').substring(0, 500);
-          return `[${i + 1}] ${r.title}\n    URL: ${r.url}\n    ${r.author ? `Author: ${r.author}\n    ` : ''}${r.publishedDate ? `Date: ${r.publishedDate}\n    ` : ''}Summary: ${highlights}`;
-        }).join('\n\n');
+        // Step 3: Process and categorize ALL results with DETAILED notes
+        const processedResults = allResults.map((r: any, i: number) => {
+          const extractedData = r.extractedData || {};
+          const highlights = (r.highlights || []).join(' ');
+          const text = r.text || '';
+          const url = r.url || '';
+          const title = r.title || '';
+          const titleLower = title.toLowerCase();
+          
+          // Determine TYPE based on URL and content
+          let type: 'Student Lead' | 'LinkedIn Profile' | 'Community' | 'Competitor' | 'Reddit User';
+          
+          const isLinkedIn = url.includes('linkedin.com/in/');
+          const isReddit = url.includes('reddit.com');
+          const isRedditCommunity = isReddit && url.match(/reddit\.com\/r\/[^/]+\/?$/);
+          const isRedditPost = isReddit && url.includes('/comments/');
+          const isCompetitorSite = !isLinkedIn && !isReddit && (
+            titleLower.includes('consultant') || 
+            titleLower.includes('education') ||
+            titleLower.includes('abroad') ||
+            url.includes('contact')
+          );
 
-        const enrichedPrompt = finalPrompt + `\n\n--- REAL-TIME WEB SEARCH RESULTS ---\nTool: Neural Web Search API\nQueries Used: ${searchQueries.join(' | ')}\nTotal Results Found: ${allResults.length}\n\n${exaContext}\n\n--- END OF SEARCH RESULTS ---\n\nIMPORTANT INSTRUCTIONS:\n1. Analyze ALL the above search results thoroughly\n2. In your output, include a "Raw Search Results" section that lists EVERY result with its title, URL, and a 1-2 line summary\n3. Generate a CSV-formatted lead list inside a \`\`\`csv code block with columns: Name,Type,Source URL,Relevance Score,Contact Info,Notes\n4. Be specific — name real people, real organizations, real URLs from the results\n5. Reference specific data points and URLs throughout your analysis`;
+          // Categorize
+          if (isRedditPost) {
+            // Check if it's a student seeking help
+            const content = (highlights + ' ' + title).toLowerCase();
+            const isStudentLead = content.includes('help') || content.includes('advice') || 
+                                  content.includes('scholarship') || content.includes('confused') ||
+                                  content.includes('want to study') || content.includes('planning') ||
+                                  content.includes('need guidance') || content.includes('which university');
+            type = isStudentLead ? 'Student Lead' : 'Reddit User';
+          } else if (isRedditCommunity) {
+            type = 'Community';
+          } else if (isLinkedIn) {
+            // Check if it's an education professional (competitor) or potential lead
+            const isEducationPro = titleLower.includes('consultant') || titleLower.includes('advisor') ||
+                                   titleLower.includes('counselor') || titleLower.includes('founder');
+            type = isEducationPro ? 'Competitor' : 'LinkedIn Profile';
+          } else if (isCompetitorSite) {
+            type = 'Competitor';
+          } else {
+            type = 'Reddit User';
+          }
 
-        // Step 5: Generate analysis with Gemini
+          // Extract NAME
+          let name = '';
+          if (isLinkedIn) {
+            // Extract from LinkedIn URL or title
+            const urlMatch = url.match(/linkedin\.com\/in\/([^/?]+)/);
+            if (urlMatch) {
+              name = urlMatch[1].split('-').filter((p: string) => isNaN(Number(p))).map((p: string) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+            }
+            if (!name && title) {
+              name = title.split(' - ')[0].split(' | ')[0].trim();
+            }
+          } else if (isReddit) {
+            // Extract Reddit username
+            const userMatch = title.match(/u\/([a-zA-Z0-9_-]+)/) || url.match(/user\/([a-zA-Z0-9_-]+)/) || url.match(/comments\/[^/]+\/([^/]+)/);
+            if (userMatch) {
+              name = 'u/' + userMatch[1].substring(0, 15);
+            } else if (isRedditCommunity) {
+              const subMatch = url.match(/reddit\.com\/r\/([^/]+)/);
+              name = subMatch ? 'r/' + subMatch[1] : title.substring(0, 30);
+            } else {
+              name = title.substring(0, 40);
+            }
+          } else {
+            name = title.substring(0, 50);
+          }
+
+          // Extract CONTACT INFO
+          const emails = extractedData.emails || [];
+          const phones = extractedData.phones || [];
+          let contactInfo = '';
+          
+          if (emails.length > 0) {
+            contactInfo = emails[0];
+          } else if (phones.length > 0) {
+            contactInfo = phones[0];
+          } else if (isLinkedIn && name) {
+            // Try to infer email pattern
+            const nameParts = name.toLowerCase().split(' ').filter(p => p.length > 1);
+            if (nameParts.length >= 2) {
+              contactInfo = `${nameParts[0]}.${nameParts[1]}@gmail.com (inferred)`;
+            }
+          }
+
+          // Calculate RELEVANCE SCORE (0-100)
+          let score = 50;
+          const content = (highlights + ' ' + text + ' ' + title).toLowerCase();
+          
+          // Boost for student-related content
+          if (content.includes('scholarship')) score += 15;
+          if (content.includes('uk university') || content.includes('uk education')) score += 10;
+          if (content.includes('masters') || content.includes('mba') || content.includes('msc')) score += 10;
+          if (content.includes('indian student') || content.includes('from india')) score += 10;
+          if (content.includes('help') || content.includes('advice') || content.includes('guidance')) score += 10;
+          if (content.includes('ielts') || content.includes('pte')) score += 5;
+          if (content.includes('visa')) score += 5;
+          
+          // Boost for having contact info
+          if (emails.length > 0) score += 15;
+          if (phones.length > 0) score += 10;
+          
+          // Type-based adjustments
+          if (type === 'Student Lead') score += 10;
+          if (type === 'Community') score = Math.max(score - 10, 40);
+          
+          score = Math.min(score, 100);
+
+          // Generate DETAILED NOTES
+          let notes = '';
+          if (type === 'Student Lead') {
+            if (content.includes('scholarship')) {
+              notes = `HOT LEAD - actively seeking scholarships due to financial need. Perfect for scholarship guidance.`;
+            } else if (content.includes('confused') || content.includes('help')) {
+              notes = `Student seeking guidance on study abroad process. High-potential future lead for ${new Date().getFullYear()}+.`;
+            } else if (content.includes('visa')) {
+              notes = `Student experiencing visa-related concerns. Highlights a key pain point for target audience.`;
+            } else if (content.includes('funding')) {
+              notes = `PhD/Masters candidate looking for funding options. Target for financial strategy messaging.`;
+            } else {
+              notes = `Student interested in UK education. Shows intent for study abroad counselling.`;
+            }
+          } else if (type === 'LinkedIn Profile') {
+            if (content.includes('mba') || content.includes('masters') || content.includes('msc')) {
+              notes = `Successful alumnus with UK degree. Ideal for testimonial and success story content.`;
+            } else if (content.includes('phd') || content.includes('researcher')) {
+              notes = `PhD researcher at UK university. Represents the STEM research pathway.`;
+            } else {
+              notes = `UK-educated professional. Good example of graduate success story.`;
+            }
+          } else if (type === 'Community') {
+            if (url.includes('Indians_StudyAbroad')) {
+              notes = `A dedicated subreddit for Indian students studying abroad. Prime location for market research and soft engagement.`;
+            } else if (url.includes('ukvisa')) {
+              notes = `Highly active community focused on UK visa issues. Essential for understanding visa processing challenges.`;
+            } else if (url.includes('UniUK')) {
+              notes = `Community for UK university students. Useful for insights into campus life and student satisfaction.`;
+            } else if (url.includes('studyAbroad')) {
+              notes = `Large, general community for study abroad topics. Good for understanding broad student concerns.`;
+            } else {
+              notes = `Relevant community for market research and trend monitoring.`;
+            }
+          } else if (type === 'Competitor') {
+            if (emails.length > 0 || phones.length > 0) {
+              notes = `Competitor with ${emails.length > 0 ? 'email' : 'phone'} contact. Monitor for competitive intelligence.`;
+            } else if (isLinkedIn) {
+              notes = `Founder/Director of competitor consultancy. Key profile to monitor for competitive intelligence.`;
+            } else {
+              notes = `Competitor offering similar services. Their website provides insights into service offerings and messaging.`;
+            }
+          } else {
+            notes = `User engaging with study abroad content. Potential lead with further qualification.`;
+          }
+
+          return {
+            name: name || 'Unknown',
+            type,
+            sourceUrl: url,
+            relevance: score,
+            contactInfo: contactInfo || 'See URL',
+            notes,
+            // Extra data for filtering
+            emails,
+            phones,
+            isLinkedIn,
+            isReddit,
+            isRedditCommunity: !!isRedditCommunity,
+            isCompetitor: type === 'Competitor',
+            isStudentLead: type === 'Student Lead',
+          };
+        });
+
+        // Sort by relevance
+        processedResults.sort((a: any, b: any) => b.relevance - a.relevance);
+
+        // Step 4: Apply filters and separate into categories
+        const studentLeads = processedResults.filter((r: any) => r.type === 'Student Lead');
+        const linkedInProfiles = processedResults.filter((r: any) => r.type === 'LinkedIn Profile');
+        const communities = processedResults.filter((r: any) => r.type === 'Community');
+        const competitors = processedResults.filter((r: any) => r.type === 'Competitor');
+        const redditUsers = processedResults.filter((r: any) => r.type === 'Reddit User');
+
+        // Step 5: Build CSV based on filters - WITH Email column for email agent
+        const csvHeader = 'Name,Type,Source URL,Relevance,Email,Phone,Contact Info,Notes';
+        let csvRows: string[] = [];
+        
+        const buildCsvRow = (r: any) => {
+          const email = r.emails && r.emails.length > 0 ? r.emails[0] : '';
+          const phone = r.phones && r.phones.length > 0 ? r.phones[0] : '';
+          return `"${r.name}","${r.type}","${r.sourceUrl}","${r.relevance}","${email}","${phone}","${r.contactInfo}","${r.notes.replace(/"/g, '""')}"`;
+        };
+        
+        if (filters.studentLeads) {
+          studentLeads.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.linkedInProfiles) {
+          linkedInProfiles.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.communities) {
+          communities.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.competitors) {
+          competitors.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.redditUsers) {
+          redditUsers.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+
+        // Sort CSV by relevance
+        csvRows.sort((a, b) => {
+          const scoreA = parseInt(a.match(/"(\d+)"/g)?.[1]?.replace(/"/g, '') || '0');
+          const scoreB = parseInt(b.match(/"(\d+)"/g)?.[1]?.replace(/"/g, '') || '0');
+          return scoreB - scoreA;
+        });
+
+        const fullCSV = csvHeader + '\n' + csvRows.join('\n');
+
+        const sendableLeads = processedResults.filter((r: any) => {
+          const type = String(r.type || '').toLowerCase();
+          return !EXCLUDED_BROADCAST_TYPES.has(type);
+        });
+        const emailableStudentLeads = studentLeads.filter((r: any) => r.emails && r.emails.length > 0);
+        const emailableSendableLeads = sendableLeads.filter((r: any) => r.emails && r.emails.length > 0);
+        const topContactableLeads = sendableLeads
+          .filter((r: any) => (r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0))
+          .slice(0, 15);
+
+        const topContactsTable = topContactableLeads.length > 0
+          ? ['| Rank | Name | Type | Score | Email | Phone | Source |', '|---|---|---|---:|---|---|---|']
+              .concat(
+                topContactableLeads.map((r: any, index: number) => `| ${index + 1} | ${String(r.name).replace(/\|/g, ' ')} | ${r.type} | ${r.relevance} | ${r.emails?.[0] || '-'} | ${r.phones?.[0] || '-'} | [link](${r.sourceUrl}) |`)
+              )
+              .join('\n')
+          : 'No contactable leads found in this batch.';
+
+        // Step 6: Generate Gemini analysis with stricter formatting and practical recommendations
+        const analysisPrompt = `You are a senior lead-generation strategist for Fateh Education. Return concise actionable markdown.
+
+DATA:
+- Total results: ${processedResults.length}
+- Student leads: ${studentLeads.length}
+- Sendable leads (excluding competitors/communities): ${sendableLeads.length}
+- Student leads with email: ${emailableStudentLeads.length}
+- Sendable leads with email: ${emailableSendableLeads.length}
+
+TOP CONTACTABLE LEADS:
+${topContactableLeads.slice(0, 10).map((r: any, i: number) => `${i + 1}. ${r.name} | ${r.type} | score ${r.relevance} | email ${r.emails?.[0] || '-'} | phone ${r.phones?.[0] || '-'}`).join('\n') || 'None'}
+
+OUTPUT RULES:
+1) Start with heading "### Strategic Analysis"
+2) Provide exactly 4 bullet insights
+3) Provide heading "### Priority Actions (Next 7 Days)"
+4) Provide exactly 5 numbered actions
+5) Keep practical, no fluff, no apology text.`;
+
         const textModel = getFlashModel();
-        const analysis = await generateWithRetry(textModel, enrichedPrompt);
+        const analysis = await generateWithRetry(textModel, analysisPrompt);
 
-        // Step 6: Prepend tool trace to output
-        const toolTraceBlock = `### 🛠️ Web Search Tool Calls\n${allTraces.map(t => `\`${t}\``).join('\n')}\n\n---\n\n`;
+        // Step 7: Build comprehensive output
+        const traceList = allTraces.map((t: string) => `- ${t}`).join('\n');
+        const emailLeadsList = emailableSendableLeads.map((r: any) =>
+          `- ${r.name} (${r.type}): ${r.emails[0]} (score ${r.relevance})`
+        ).join('\n') || 'No sendable leads with verified emails found.';
+
+        const leadsWithEmailCount = emailableStudentLeads.length;
+        const sendableEmailCount = emailableSendableLeads.length;
+        const leadsWithPhoneCount = studentLeads.filter((r: any) => r.phones && r.phones.length > 0).length;
+        const highPriorityCount = sendableLeads.filter((r: any) => r.relevance >= 85).length;
+
+        const output = `## 🔍 Lead Research Report
+
+### 🛠️ Search Queries Executed
+${traceList}
+
+### 📊 Results Overview
+| Category | Count |
+|----------|-------|
+| **Student Leads** | **${studentLeads.length}** |
+| LinkedIn Profiles | ${linkedInProfiles.length} |
+| Communities | ${communities.length} |
+| Competitors | ${competitors.length} |
+| Reddit Users | ${redditUsers.length} |
+| **Total** | **${processedResults.length}** |
+
+### ✅ Data Quality Snapshot
+- Student leads with verified email: ${leadsWithEmailCount}
+- Sendable leads with verified email (excl. competitor/community): ${sendableEmailCount}
+- Student leads with phone numbers: ${leadsWithPhoneCount}
+- High-priority leads (score 85+): ${highPriorityCount}
+- CSV rows exported after filters: ${csvRows.length}
+
+### 🔥 Top Contactable Leads Table
+${topContactsTable}
+
+### 📈 Analysis
+${analysis}
+
+---
+
+### 📥 FULL CSV DATA (${csvRows.length} rows)
+\`\`\`csv
+${fullCSV}
+\`\`\`
+
+---
+
+### 📧 Leads Ready for Email Outreach
+${emailLeadsList}
+
+### 🧭 Recommended Next Steps
+- Run Email node on connected output immediately.
+- Use sendable leads table (excluding competitors/communities) as send source.
+- Run another research batch with alternate intent keywords to improve yield.
+`;
+
+        // Store both strict-student and broader sendable leads for Email node
+        const emailableLeads = emailableStudentLeads;
+        const snapshotResult = await saveWebResearchSnapshot({
+          runId,
+          workflowRunId,
+          nodeId,
+          createdAt: new Date().toISOString(),
+          csv: fullCSV,
+          leadsWithEmail: emailableSendableLeads.map((r: any) => ({
+            name: r.name,
+            email: r.emails[0],
+            score: r.relevance,
+          })),
+          summary: {
+            totalResults: processedResults.length,
+            studentLeads: studentLeads.length,
+            emailableLeads: emailableLeads.length,
+            emailableSendableLeads: emailableSendableLeads.length,
+            filters,
+          },
+        });
+
+        appendObservabilityLog('agents', {
+          event: 'web_research_completed',
+          runId,
+          workflowRunId,
+          nodeId,
+          nodeType: 'exa_research',
+          totalResults: processedResults.length,
+          studentLeads: studentLeads.length,
+          emailableLeads: emailableLeads.length,
+          emailableSendableLeads: emailableSendableLeads.length,
+          csvRows: csvRows.length,
+          cachePath: snapshotResult.latestPath,
+        });
 
         response = NextResponse.json({
           success: true,
-          output: toolTraceBlock + analysis,
+          output,
           nodeId,
+          metadata: {
+            runId,
+            workflowRunId,
+            nodeType: 'exa_research',
+            totalResults: processedResults.length,
+            studentLeads: studentLeads.length,
+            emailableLeads: emailableLeads.length,
+            emailableSendableLeads: emailableSendableLeads.length,
+            cachePath: snapshotResult.latestPath,
+            studentLeadsWithEmail: emailableLeads.map((r: any) => ({
+              name: r.name,
+              email: r.emails[0],
+              score: r.relevance,
+            })),
+            allLeadsWithEmail: emailableSendableLeads.map((r: any) => ({
+              name: r.name,
+              email: r.emails[0],
+              score: r.relevance,
+            })),
+            leadsWithEmail: emailableSendableLeads.map((r: any) => ({
+              name: r.name,
+              email: r.emails[0],
+              score: r.relevance,
+            })),
+          },
         });
         return response;
       } catch (err: any) {
         console.error('[exa_research] Error:', err);
         response = NextResponse.json({
           success: true,
-          output: `⚠️ Web research failed: ${err.message}. Falling back to general research.`,
+          output: `⚠️ Web research failed: ${err.message}. Please try again.`,
           nodeId,
         });
         return response;
@@ -292,6 +900,20 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
     if (context.nodeType === 'email') {
       const textModel = getFlashModel();
       try {
+        if (context.incomingEdges.length === 0) {
+          const autoContextNodes = (nodes as WorkflowNode[])
+            .filter((n) => n.id !== nodeId && n.data?.status === 'complete' && typeof n.data?.output === 'string' && n.data.output.trim())
+            .slice(-2);
+
+          if (autoContextNodes.length > 0) {
+            finalPrompt += `\n\nAUTO-CONTEXT (derived from latest completed workflow nodes):\n`;
+            for (const sourceNode of autoContextNodes) {
+              finalPrompt += `\n--- ${sourceNode.data?.label || sourceNode.id} (${sourceNode.data?.type || 'node'}) ---\n`;
+              finalPrompt += `${String(sourceNode.data?.output || '').substring(0, 2500)}\n`;
+            }
+          }
+        }
+
         // Generate the email content using AI
         console.log('[email] Generating email content with AI...');
         const generatedContent = await generateWithRetry(textModel, finalPrompt);
@@ -300,6 +922,7 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
         
         // Parse JSON response with better error handling
         let emailData;
+        let emailSequence: EmailTemplate[] = [];
         try {
           // Remove markdown code blocks if present
           let cleanedContent = generatedContent.trim();
@@ -307,26 +930,38 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
           // Remove ```json and ``` markers
           cleanedContent = cleanedContent.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
           
-          // Try to extract JSON from the response
-          const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            emailData = JSON.parse(jsonMatch[0]);
+          // Try parsing full JSON first (array or object)
+          let parsedPayload: any = null;
+          try {
+            parsedPayload = JSON.parse(cleanedContent);
+          } catch {
+            // Fallback to extracting JSON object if the model included prose
+            const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              parsedPayload = JSON.parse(jsonMatch[0]);
+            }
+          }
+
+          if (parsedPayload) {
+            emailSequence = normalizeEmailSequence(parsedPayload);
+            emailData = emailSequence[0] || null;
             console.log('[email] Successfully parsed JSON from AI response');
             console.log('[email] Parsed data:', {
-              subject: emailData.subject?.substring(0, 50),
-              htmlPreview: emailData.html?.substring(0, 100),
-              textPreview: emailData.text?.substring(0, 100),
+              sequenceCount: emailSequence.length,
+              subject: emailData?.subject?.substring(0, 50),
+              htmlPreview: emailData?.html?.substring(0, 100),
+              textPreview: emailData?.text?.substring(0, 100),
             });
           } else {
             throw new Error('No JSON object found in response');
           }
           
           // Validate and ensure required fields exist with content
-          if (!emailData.subject || typeof emailData.subject !== 'string' || emailData.subject.trim().length === 0) {
+          if (!emailData?.subject || typeof emailData.subject !== 'string' || emailData.subject.trim().length === 0) {
             throw new Error('Missing or empty subject field');
           }
           
-          if (!emailData.html || typeof emailData.html !== 'string' || emailData.html.trim().length === 0) {
+          if (!emailData?.html || typeof emailData.html !== 'string' || emailData.html.trim().length === 0) {
             throw new Error('Missing or empty html field');
           }
           
@@ -347,6 +982,13 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
           
           emailData.subject = cleanPlaceholders(emailData.subject);
           emailData.html = cleanPlaceholders(emailData.html);
+
+          emailSequence = emailSequence.map((template) => ({
+            ...template,
+            subject: cleanPlaceholders(template.subject),
+            html: cleanPlaceholders(template.html),
+            text: template.text ? cleanPlaceholders(template.text) : undefined,
+          }));
           
           // Ensure text version exists
           if (!emailData.text || typeof emailData.text !== 'string' || emailData.text.trim().length === 0) {
@@ -494,6 +1136,7 @@ Team Fateh Education`;
             html: htmlContent,
             text: textContent,
           };
+          emailSequence = [emailData];
           
           console.log('[email] Intelligent fallback email generated:', {
             subject,
@@ -506,21 +1149,132 @@ Team Fateh Education`;
 
         console.log('[email] Final email data ready:', {
           subject: emailData.subject,
+          sequenceCount: emailSequence.length,
           htmlLength: emailData.html?.length || 0,
           textLength: emailData.text?.length || 0,
           htmlPreview: emailData.html?.substring(0, 150),
         });
 
-        // Get email list from node data (should be uploaded via UI)
+        // 1) Node manual recipient list (uploaded CSV), 2) connected Web Research nodes, 3) local cache fallback
         const node = (nodes as WorkflowNode[]).find(n => n.id === nodeId);
-        const emailList = (node?.data as any)?.emailList;
+        const initialManualList = Array.isArray((node?.data as any)?.emailList)
+          ? ((node?.data as any)?.emailList as EmailRecipient[])
+          : [];
+
+        const incomingSourceNodeIds = (edges as WorkflowEdge[])
+          .filter(edge => edge.target === nodeId)
+          .map(edge => edge.source);
+
+        const webResearchNodes = (nodes as WorkflowNode[]).filter(n => {
+          const nodeType = n.data?.type || n.type;
+          return nodeType === 'exa_research' && n.data?.status === 'complete';
+        });
+
+        const incomingResearchNodes = webResearchNodes.filter(n => incomingSourceNodeIds.includes(n.id));
+        const allResearchNodes = webResearchNodes;
+        const preferredResearchNodes = incomingResearchNodes.length > 0 ? incomingResearchNodes : allResearchNodes;
+
+        const cachedSnapshots = await Promise.all(
+          preferredResearchNodes.map(sourceNode => readLatestWebResearchSnapshot(sourceNode.id))
+        );
+
+        const cacheRecipientsBroad = dedupeRecipients(
+          cachedSnapshots.flatMap(snapshot => {
+            if (!snapshot || !Array.isArray(snapshot.leadsWithEmail)) return [];
+            return snapshot.leadsWithEmail.map((lead: any) => ({
+              email: lead?.email,
+              name: lead?.name,
+            }));
+          })
+        );
+
+        const metadataRecipientsStrict = dedupeRecipients(
+          preferredResearchNodes.flatMap(node => extractRecipientsFromNodeMetadata(node, 'studentLeadsWithEmail'))
+        );
+
+        const metadataRecipientsBroad = dedupeRecipients(
+          preferredResearchNodes.flatMap(node => [
+            ...extractRecipientsFromNodeMetadata(node, 'allLeadsWithEmail'),
+            ...extractRecipientsFromNodeMetadata(node, 'leadsWithEmail'),
+          ])
+        );
+
+        const csvRecipientsStrict = dedupeRecipients(
+          preferredResearchNodes.flatMap(sourceNode => extractRecipientsFromCsvOutput(sourceNode.data.output || '', { studentOnly: true }))
+        );
+
+        const csvRecipientsBroad = dedupeRecipients(
+          preferredResearchNodes.flatMap(sourceNode =>
+            extractRecipientsFromCsvOutput(sourceNode.data.output || '', {
+              excludeTypes: EXCLUDED_BROADCAST_TYPES,
+            })
+          )
+        );
+
+        const strictStudentEmailList = dedupeRecipients([
+          ...initialManualList,
+          ...metadataRecipientsStrict,
+          ...csvRecipientsStrict,
+        ]);
+
+        const broadEmailList = dedupeRecipients([
+          ...initialManualList,
+          ...cacheRecipientsBroad,
+          ...metadataRecipientsBroad,
+          ...csvRecipientsBroad,
+        ]);
+
+        const emailList = strictStudentEmailList.length > 0 ? strictStudentEmailList : broadEmailList;
+        const fallbackUsed = strictStudentEmailList.length === 0 && broadEmailList.length > 0;
+
+        const recipientDiscovery = {
+          runId,
+          workflowRunId,
+          sourceMode: incomingResearchNodes.length > 0 ? 'connected_nodes' : 'workflow_fallback',
+          fallbackUsed,
+          manualRecipients: initialManualList.length,
+          connectedResearchNodes: incomingResearchNodes.length,
+          totalResearchNodes: allResearchNodes.length,
+          strictRecipients: strictStudentEmailList.length,
+          broadRecipients: broadEmailList.length,
+          cacheRecipients: cacheRecipientsBroad.length,
+          metadataRecipientsStrict: metadataRecipientsStrict.length,
+          metadataRecipientsBroad: metadataRecipientsBroad.length,
+          csvRecipientsStrict: csvRecipientsStrict.length,
+          csvRecipientsBroad: csvRecipientsBroad.length,
+          finalRecipients: emailList.length,
+        };
+
+        console.log('[email] recipient discovery', recipientDiscovery);
+        appendObservabilityLog('workflows', {
+          event: 'email_recipients_resolved',
+          nodeId,
+          ...recipientDiscovery,
+        });
 
         if (!emailList || !Array.isArray(emailList) || emailList.length === 0) {
+          // Return helpful output with instructions
+          const webResearchCount = (nodes as WorkflowNode[]).filter(n => (n.data?.type || n.type) === 'exa_research').length;
+          const debugInfo = webResearchCount > 0 ? 
+            `\n\n🔍 Found ${webResearchCount} Web Research node(s) in workflow, but no valid emails were extracted. Check the Web Research output table and cache file.` : 
+            '\n\n💡 Add a Web Research node to your workflow and run it first to extract leads automatically!';
+          
           response = NextResponse.json({ 
-            success: true, 
-            output: `✉️ Email content generated:\n\nSubject: ${emailData.subject}\n\n⚠️ No email list uploaded. Please upload a CSV file with email addresses to send this campaign.\n\nPreview:\n${emailData.text?.substring(0, 200) || emailData.html?.substring(0, 200)}...`,
+            success: true,
+            output: `✉️ Email Campaign Ready!\n\n**Subject:** ${emailData.subject}\n\n⚠️ **No email recipients found**${debugInfo}\n\n**🤖 AGENTIC MODE:** This email agent automatically searches for completed Web Research outputs in your workflow - no manual connections needed!\n\n**To send this campaign:**\n1. Add a Web Research node and run it first (it will find student leads with emails)\n2. Then run this Email node - it will automatically use those leads!\n\n**Preview:**\n${emailData.text?.substring(0, 300) || emailData.html?.substring(0, 300)}...\n\n---\n📧 *Emails are sent only to Student Leads, not competitors or communities*`,
             nodeId,
-            metadata: emailData,
+            metadata: {
+              ...emailData,
+              recipientDiscovery,
+            },
+          });
+          appendObservabilityLog('agents', {
+            event: 'email_node_no_recipients',
+            runId,
+            workflowRunId,
+            nodeId,
+            subject: emailData.subject,
+            recipientDiscovery,
           });
           return response;
         }
@@ -537,6 +1291,13 @@ Team Fateh Education`;
             subject: emailData.subject,
             html: emailData.html,
             text: emailData.text,
+            sequence: emailSequence,
+            campaignContext: {
+              runId,
+              workflowRunId,
+              sourceNodeId: nodeId,
+              sourceNodeType: context.nodeType,
+            },
           }),
         });
 
@@ -544,30 +1305,59 @@ Team Fateh Education`;
         console.log('[email] Send result:', sendData);
 
         if (!sendRes.ok || !sendData.success) {
+          const firstDeliveryError = Array.isArray(sendData?.errors) && sendData.errors.length > 0
+            ? sendData.errors[0]
+            : null;
           response = NextResponse.json({ 
-            success: true, 
-            output: `Email content generated:\n\nSubject: ${emailData.subject}\n\n⚠️ Failed to send emails: ${sendData.error || 'Unknown error'}\n\nDetails: ${JSON.stringify(sendData.details || {})}`,
+            success: false,
+            error: `Failed to send campaign emails: ${sendData.error || 'Unknown error'}`,
+            details: {
+              providerDetails: sendData.details || null,
+              firstDeliveryError,
+              remediation: 'Verify RESEND domain for production sending OR configure GMAIL_USER and GMAIL_APP_PASSWORD.',
+            },
             nodeId,
-            metadata: emailData,
-          });
+            metadata: {
+              ...emailData,
+              recipientDiscovery,
+            },
+          }, { status: sendRes.status || 502 });
           return response;
         }
 
         const errorSummary = sendData.errors && sendData.errors.length > 0 
           ? `\n\n⚠️ Some emails failed (${sendData.failed}/${sendData.total}):\n${sendData.errors.slice(0, 3).join('\n')}`
           : '';
+        const fallbackSummary = fallbackUsed
+          ? '\n\nℹ️ No student-email rows found, so fallback recipient mode was used (excluding competitors/communities).'
+          : '';
 
         response = NextResponse.json({ 
           success: true, 
-          output: `✅ Email campaign sent successfully!\n\nSubject: ${emailData.subject}\n\n📧 Sent: ${sendData.sent}/${sendData.total} emails${errorSummary}\n\nRecipients: ${emailList.slice(0, 5).map((r: any) => typeof r === 'string' ? r : r.email).join(', ')}${emailList.length > 5 ? ` and ${emailList.length - 5} more...` : ''}`,
+          output: `✅ Email campaign sent successfully!\n\nSubject: ${emailData.subject}\n\n📧 Sent: ${sendData.sent}/${sendData.total} emails${sendData.sequenceLength ? ` across ${sendData.sequenceLength} sequence step(s)` : ''}${errorSummary}${fallbackSummary}\n\nRecipients: ${emailList.slice(0, 5).map((r: any) => typeof r === 'string' ? r : r.email).join(', ')}${emailList.length > 5 ? ` and ${emailList.length - 5} more...` : ''}`,
           nodeId,
           metadata: {
             ...emailData,
+            sequenceLength: emailSequence.length,
+            recipientDiscovery,
             sendStats: {
               sent: sendData.sent,
               failed: sendData.failed,
               total: sendData.total,
             },
+          },
+        });
+        appendObservabilityLog('agents', {
+          event: 'email_node_completed',
+          runId,
+          workflowRunId,
+          nodeId,
+          subject: emailData.subject,
+          recipientDiscovery,
+          sendStats: {
+            sent: sendData.sent,
+            failed: sendData.failed,
+            total: sendData.total,
           },
         });
         return response;
@@ -807,6 +1597,33 @@ Team Fateh Education`;
     );
     return response;
   } finally {
+    const statusCode = response?.status || (error ? 500 : 200);
+    const finalSummary = {
+      ...executionSummary,
+      nodeType: requestPayload?.nodes?.find?.((n: any) => n.id === requestPayload?.nodeId)?.data?.type || null,
+      statusCode,
+      success: !error && statusCode < 400,
+      durationMs: Date.now() - startTime,
+      errorMessage: error?.message || null,
+    };
+
+    appendObservabilityLog('unified-executor', {
+      event: 'node_execution_finished',
+      ...finalSummary,
+    });
+
+    appendObservabilityLog('agents', {
+      event: 'agent_output_summary',
+      ...finalSummary,
+    });
+
+    if (error || statusCode >= 400) {
+      appendObservabilityLog('errors', {
+        event: 'agent_execution_error',
+        ...finalSummary,
+      });
+    }
+
     // Log audit event (non-blocking)
     logAuditEvent({
       request,
@@ -814,7 +1631,7 @@ Team Fateh Education`;
       session,
       error,
       action: 'execute_workflow_node',
-      metadata: { nodeId: (request as any).nodeId },
+      metadata: finalSummary,
       startTime,
     }).catch(() => {});
   }

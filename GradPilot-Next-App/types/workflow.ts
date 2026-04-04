@@ -18,6 +18,15 @@ export interface WorkflowNodeData {
   output?: string;
   error?: string;
   generatedVideos?: Record<string, string>;
+  metadata?: Record<string, any>;
+  emailList?: Array<{ email: string; name?: string }>;
+  filters?: {
+    studentLeads?: boolean;
+    linkedInProfiles?: boolean;
+    communities?: boolean;
+    competitors?: boolean;
+    redditUsers?: boolean;
+  };
 }
 
 export interface WorkflowNode {

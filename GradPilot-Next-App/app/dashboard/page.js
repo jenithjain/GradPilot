@@ -1,13 +1,15 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { AvatarPicker } from "@/components/ui/avatar-picker";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import LiveKYCChecklist from "@/components/LiveKYCChecklist";
 import {
-  Target,
   Rocket,
   Sparkles,
   Mic2,
@@ -15,6 +17,10 @@ import {
   X,
   ChevronRight,
 } from "lucide-react";
+
+const ElevenLabsVoiceAgent = dynamic(() => import('@/components/ElevenLabsVoiceAgent'), { ssr: false });
+const CounsellingSidebarCard = dynamic(() => import('@/components/CounsellingSidebarCard'), { ssr: false, loading: () => null });
+const StudentProfileCard = dynamic(() => import('@/components/StudentProfileCard'), { ssr: false });
 
 const AVATARS = [
   { id: 1, name: "Hulk",       src: "/avatars/hulk.png",       accent: "from-lime-400 to-emerald-500",  ringColor: "ring-emerald-500", desc: "Bold and unstoppable" },
@@ -25,9 +31,127 @@ const AVATARS = [
 
 export default function Dashboard() {
   const router = useRouter();
+  const { update: updateSession } = useSession();
   const [showJourneyModal, setShowJourneyModal] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
   const [showFillMethod, setShowFillMethod] = useState(false);
+  const [showVoiceAgent, setShowVoiceAgent] = useState(false);
+
+  // KYC status state
+  const [kycStatus, setKycStatus] = useState('loading'); // 'loading' | 'completed' | 'in-progress' | 'new'
+  const [studentProfile, setStudentProfile] = useState(null);
+  const [latestConversation, setLatestConversation] = useState(null);
+  const [counsellingProgress, setCounsellingProgress] = useState(null);
+  const [preparingResumeCall, setPreparingResumeCall] = useState(false);
+  const [preparedVoiceSession, setPreparedVoiceSession] = useState(null);
+  // Counter to force StudentProfileCard refresh after voice agent completes
+  const [profileRefreshKey, setProfileRefreshKey] = useState(0);
+
+  const refreshDashboardState = useCallback(async () => {
+    try {
+      const res = await fetch('/api/kyc', { cache: 'no-store' });
+      if (!res.ok) throw new Error();
+
+      const data = await res.json();
+      const profile = data.studentProfile || null;
+      const progress = data.counsellingProgress || { filledCount: 0, totalCount: 0, isComplete: false };
+      const hasCounsellingData = (progress.filledCount || 0) > 0;
+      const hasAnyProfileData = !!(profile && Object.keys(profile).length > 0);
+
+      setStudentProfile(profile);
+      setLatestConversation(data.latestConversation || null);
+      setCounsellingProgress(progress);
+
+      if (progress.isComplete || (data.hasCompletedKYC && !hasCounsellingData)) {
+        setKycStatus('completed');
+      } else if (hasCounsellingData || hasAnyProfileData) {
+        setKycStatus('in-progress');
+      } else {
+        setKycStatus('new');
+      }
+
+      return {
+        isComplete: progress.isComplete || (data.hasCompletedKYC && !hasCounsellingData),
+        filledCount: progress.filledCount || 0,
+        latestConversationId: data.latestConversation?.conversationId || null,
+      };
+    } catch {
+      setKycStatus('new');
+      return { isComplete: false, filledCount: 0, latestConversationId: null };
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDashboardState();
+  }, [profileRefreshKey, refreshDashboardState]);
+
+  useEffect(() => {
+    const handleProfileUpdate = () => {
+      refreshDashboardState();
+    };
+
+    window.addEventListener('counselling-profile:updated', handleProfileUpdate);
+    return () => {
+      window.removeEventListener('counselling-profile:updated', handleProfileUpdate);
+    };
+  }, [refreshDashboardState]);
+
+  const handleVoiceComplete = useCallback(async () => {
+    setShowVoiceAgent(false);
+    setPreparedVoiceSession(null);
+    setProfileRefreshKey((k) => k + 1);
+
+    // Wait for ElevenLabs to finalize transcript before fetching results
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const state = await refreshDashboardState();
+    if (state.isComplete) {
+      await updateSession({ hasCompletedKYC: true });
+      return;
+    }
+
+    // Safety net: if extraction didn't populate the profile, retry once
+    if (state.filledCount === 0 && state.latestConversationId) {
+      try {
+        const retryRes = await fetch('/api/voice-agent/extract-kyc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationId: state.latestConversationId }),
+        });
+        if (retryRes.ok) {
+          const retried = await refreshDashboardState();
+          if (retried.isComplete) {
+            await updateSession({ hasCompletedKYC: true });
+          }
+        }
+      } catch {
+        // Non-fatal — the primary extraction path handles most cases
+      }
+    }
+  }, [refreshDashboardState, updateSession]);
+
+  const handleResumeCall = useCallback(async () => {
+    setPreparingResumeCall(true);
+
+    try {
+      const res = await fetch('/api/voice-agent/memory?prepareResume=1', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Failed to prepare resume context');
+
+      const data = await res.json();
+      setPreparedVoiceSession({
+        context: data.context || '',
+        studentName: data.studentName || '',
+        resumePlan: data.resumePlan || null,
+      });
+    } catch (error) {
+      console.error('[Dashboard] Resume preparation failed:', error);
+      setPreparedVoiceSession(null);
+    } finally {
+      setPreparingResumeCall(false);
+      setShowVoiceAgent(true);
+    }
+  }, []);
+
   const handleAvatarSelect = (avatar) => {
     setSelectedAvatar(avatar);
   };
@@ -42,6 +166,107 @@ export default function Dashboard() {
     setShowFillMethod(false);
   };
 
+  // Auto-redirect to the complete dashboard when all fields are filled
+  useEffect(() => {
+    if (kycStatus === 'completed' && counsellingProgress?.isComplete) {
+      router.replace('/dashboard/complete');
+    }
+  }, [kycStatus, counsellingProgress, router]);
+
+  // ── Loading state ──
+  if (kycStatus === 'loading' || (kycStatus === 'completed' && counsellingProgress?.isComplete)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+          <p className="ivy-font text-sm text-muted-foreground">Loading your dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if ((kycStatus === 'completed' || kycStatus === 'in-progress') && studentProfile) {
+    const hasEditableProfile = (counsellingProgress?.filledCount || 0) > 0;
+
+    return (
+      <div className="min-h-screen w-full">
+        <div className="container mx-auto max-w-[1380px] space-y-8 p-4 sm:p-6 lg:p-8">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h1 className="ivy-font mb-2 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
+                Student Dashboard
+              </h1>
+              <p className="ivy-font max-w-3xl text-sm leading-7 text-muted-foreground sm:text-base">
+                Live counselling data from ElevenLabs, persisted in MongoDB and ready to resume when anything is still missing.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-6">
+            {hasEditableProfile ? (
+              <StudentProfileCard
+                onResumeCall={counsellingProgress?.isComplete ? undefined : handleResumeCall}
+                refreshKey={profileRefreshKey}
+              />
+            ) : (
+              <CounsellingSidebarCard
+                progress={counsellingProgress}
+                onResumeCall={handleResumeCall}
+              />
+            )}
+
+            {counsellingProgress?.isComplete && (
+              <div className="flex justify-center pt-2">
+                <Button
+                  onClick={() => router.push('/dashboard/complete')}
+                  className="h-14 bg-linear-to-r from-emerald-500 to-teal-500 px-10 text-lg font-bold text-white shadow-xl shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:from-emerald-600 hover:to-teal-600"
+                >
+                  <Sparkles className="mr-2.5 h-5 w-5" />
+                  Proceed to Dashboard
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {preparingResumeCall && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/88 backdrop-blur-sm">
+            <div className="rounded-[28px] border border-border/50 bg-card/85 px-8 py-7 text-center shadow-2xl">
+              <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+              <h2 className="ivy-font mt-4 text-2xl font-bold text-foreground">Preparing resume flow</h2>
+              <p className="ivy-font mt-2 max-w-md text-sm leading-7 text-muted-foreground">
+                Gemini is reviewing the saved profile and previous call so the next conversation can skip the generic opening and go straight to the missing details.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {showVoiceAgent && (
+          <div className="fixed inset-0 z-50 flex bg-background">
+            <div className="relative flex-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVoiceAgent(false);
+                  setPreparedVoiceSession(null);
+                }}
+                className="absolute right-4 top-4 z-10 rounded-full border border-border/50 bg-card p-2 text-muted-foreground shadow-md transition-colors hover:text-foreground"
+                aria-label="Close voice agent"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <ElevenLabsVoiceAgent
+                mode="onboarding"
+                onComplete={handleVoiceComplete}
+                sessionMemory={preparedVoiceSession}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen w-full">
       <div className="container mx-auto max-w-7xl space-y-8 p-6">
@@ -54,58 +279,55 @@ export default function Dashboard() {
               AI-powered student lead qualification and counselling analytics
             </p>
           </div>
-
         </div>
 
-        <Card className="relative overflow-hidden border-border/40 bg-card/50 backdrop-blur-sm">
-          {/* decorative background orbs */}
-          <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-emerald-500/10 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-teal-500/10 blur-3xl" />
+        {/* ── Onboarding prompt (shown when NO data yet) ── */}
+        {kycStatus === 'new' && (
+          <Card className="relative overflow-hidden border-border/40 bg-card/50 backdrop-blur-sm">
+            <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-emerald-500/10 blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-teal-500/10 blur-3xl" />
 
-          <CardContent className="relative flex flex-col items-center justify-center gap-10 py-24 sm:py-32">
-            {/* icon */}
-            <div className="flex h-28 w-28 items-center justify-center rounded-3xl bg-linear-to-br from-emerald-400 to-teal-500 shadow-2xl shadow-emerald-500/40 ring-4 ring-emerald-500/20">
-              <Rocket className="h-14 w-14 text-white" />
-            </div>
+            <CardContent className="relative flex flex-col items-center justify-center gap-10 py-24 sm:py-32">
+              <div className="flex h-28 w-28 items-center justify-center rounded-3xl bg-linear-to-br from-emerald-400 to-teal-500 shadow-2xl shadow-emerald-500/40 ring-4 ring-emerald-500/20">
+                <Rocket className="h-14 w-14 text-white" />
+              </div>
 
-            {/* text */}
-            <div className="space-y-4 text-center">
-              <h2 className="ivy-font text-4xl font-extrabold text-foreground sm:text-5xl lg:text-6xl">
-                Ready to begin?
-              </h2>
-              <p className="ivy-font mx-auto max-w-xl text-lg text-muted-foreground sm:text-xl">
-                Set up your student profile so we can personalise your counselling journey and match you with the best universities.
-              </p>
-            </div>
+              <div className="space-y-4 text-center">
+                <h2 className="ivy-font text-4xl font-extrabold text-foreground sm:text-5xl lg:text-6xl">
+                  Ready to begin?
+                </h2>
+                <p className="ivy-font mx-auto max-w-xl text-lg text-muted-foreground sm:text-xl">
+                  Set up your student profile so we can personalise your counselling journey and match you with the best universities.
+                </p>
+              </div>
 
-            {/* feature pills */}
-            <div className="flex flex-wrap justify-center gap-3">
-              {[
-                { icon: "🎓", label: "University Matching" },
-                { icon: "🗺️", label: "Personalised Roadmap" },
-                { icon: "💬", label: "AI Counselling" },
-                { icon: "📊", label: "Readiness Score" },
-              ].map(({ icon, label }) => (
-                <span
-                  key={label}
-                  className="ivy-font flex items-center gap-2 rounded-full border border-border/50 bg-muted/40 px-5 py-2 text-sm font-medium text-foreground backdrop-blur-sm"
-                >
-                  <span>{icon}</span>{label}
-                </span>
-              ))}
-            </div>
+              <div className="flex flex-wrap justify-center gap-3">
+                {[
+                  { icon: "🎓", label: "University Matching" },
+                  { icon: "🗺️", label: "Personalised Roadmap" },
+                  { icon: "💬", label: "AI Counselling" },
+                  { icon: "📊", label: "Readiness Score" },
+                ].map(({ icon, label }) => (
+                  <span
+                    key={label}
+                    className="ivy-font flex items-center gap-2 rounded-full border border-border/50 bg-muted/40 px-5 py-2 text-sm font-medium text-foreground backdrop-blur-sm"
+                  >
+                    <span>{icon}</span>{label}
+                  </span>
+                ))}
+              </div>
 
-            {/* CTA */}
-            <Button
-              onClick={() => setShowJourneyModal(true)}
-              className="h-14 bg-linear-to-r from-emerald-500 to-teal-500 px-10 text-lg font-bold text-white shadow-xl shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:from-emerald-600 hover:to-teal-600"
-            >
-              <Sparkles className="mr-2.5 h-6 w-6" />
-              Start Your Journey
-            </Button>
-          </CardContent>
-        </Card>
-
+              <Button
+                onClick={() => setShowJourneyModal(true)}
+                className="h-14 bg-linear-to-r from-emerald-500 to-teal-500 px-10 text-lg font-bold text-white shadow-xl shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:from-emerald-600 hover:to-teal-600"
+              >
+                <Sparkles className="mr-2.5 h-6 w-6" />
+                Start Your Journey
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+        {/* ── Avatar Picker Modal ── */}
         {showJourneyModal && !showFillMethod && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
             <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-border/50 bg-card shadow-2xl">
@@ -136,6 +358,7 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* ── Fill Method Modal ── */}
         {showJourneyModal && showFillMethod && selectedAvatar && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
             <div className="relative w-full max-w-2xl rounded-3xl border border-border/50 bg-card p-8 shadow-2xl sm:p-10">
@@ -190,12 +413,12 @@ export default function Dashboard() {
                   onClick={() => {
                     try { localStorage.setItem('selectedAvatar', JSON.stringify(selectedAvatar)); } catch {}
                     closeJourneyFlow();
-                    router.push("/onboarding?mode=voice");
+                    setShowVoiceAgent(true);
                   }}
-                  className="group flex flex-col items-center gap-4 rounded-xl border border-border/50 bg-muted/30 p-6 transition-all duration-200 hover:scale-105 hover:border-violet-500/60 hover:bg-violet-500/10"
+                  className="group flex flex-col items-center gap-4 rounded-xl border border-border/50 bg-muted/30 p-6 transition-all duration-200 hover:scale-105 hover:border-emerald-500/60 hover:bg-emerald-500/10"
                 >
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-500/10 transition-colors group-hover:bg-violet-500/20">
-                    <Mic2 className="h-6 w-6 text-violet-500" />
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 transition-colors group-hover:bg-emerald-500/20">
+                    <Mic2 className="h-6 w-6 text-emerald-500" />
                   </div>
                   <div className="text-center">
                     <p className="ivy-font font-semibold text-foreground">Fill with Voice Agent</p>
@@ -203,7 +426,7 @@ export default function Dashboard() {
                       Let our AI guide you by voice
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-violet-500" />
+                  <ChevronRight className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-emerald-500" />
                 </button>
               </div>
               <button
@@ -213,6 +436,31 @@ export default function Dashboard() {
               >
                 Back to avatar selection
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Voice Agent with side-by-side Checklist ── */}
+        {showVoiceAgent && (
+          <div className="fixed inset-0 z-50 flex bg-background">
+            {/* Live checklist sidebar — left */}
+            <div className="hidden w-72 border-r border-border/40 lg:flex">
+              <LiveKYCChecklist active className="w-full rounded-none border-0" />
+            </div>
+            {/* Voice agent — takes most of the space */}
+            <div className="relative flex-1">
+              <button
+                type="button"
+                onClick={() => setShowVoiceAgent(false)}
+                className="absolute right-4 top-4 z-10 rounded-full border border-border/50 bg-card p-2 text-muted-foreground shadow-md transition-colors hover:text-foreground"
+                aria-label="Close voice agent"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <ElevenLabsVoiceAgent
+                mode="onboarding"
+                onComplete={handleVoiceComplete}
+              />
             </div>
           </div>
         )}
