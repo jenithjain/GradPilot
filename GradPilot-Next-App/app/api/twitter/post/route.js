@@ -118,44 +118,88 @@ export async function POST(req) {
       }
     }
     
-    // Post tweet with media
+    // Post tweet with media (with retry for 503/5xx errors)
     const url = 'https://api.twitter.com/2/tweets';
-    const authHeader = generateOAuthHeader('POST', url);
-    
-    console.log('Generated OAuth header (first 100 chars):', authHeader.substring(0, 100));
     
     const tweetBody = { text };
     if (mediaIds.length > 0) {
       tweetBody.media = { media_ids: mediaIds };
       console.log(`Attaching ${mediaIds.length} images to tweet`);
     }
-    
-    const postRes = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(tweetBody),
-    });
-    
-    const responseData = await postRes.json();
-    
-    if (!postRes.ok) {
-      console.error('Twitter API Error:', responseData);
-      console.error('Request details:', {
-        url,
+
+    const MAX_RETRIES = 3;
+    let lastError = null;
+    let lastStatus = 0;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      // Generate fresh OAuth header per attempt (new timestamp + nonce)
+      const authHeader = generateOAuthHeader('POST', url);
+      console.log(`[Attempt ${attempt}/${MAX_RETRIES}] OAuth header (first 80 chars):`, authHeader.substring(0, 80));
+
+      const postRes = await fetch(url, {
         method: 'POST',
-        textLength: text.length,
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(tweetBody),
       });
-      return NextResponse.json({ 
-        error: 'Failed to post to Twitter', 
-        details: responseData 
-      }, { status: postRes.status });
+
+      if (postRes.ok) {
+        const responseData = await postRes.json();
+        console.log('Twitter post successful:', responseData);
+        return NextResponse.json({ success: true, post: responseData });
+      }
+
+      const responseData = await postRes.json().catch(() => ({ error: postRes.statusText }));
+      lastError = responseData;
+      lastStatus = postRes.status;
+
+      console.error(`[Attempt ${attempt}] Twitter API Error (${postRes.status}):`, responseData);
+
+      // Only retry on 5xx server errors or 429 rate limit
+      if (postRes.status < 500 && postRes.status !== 429) {
+        return NextResponse.json({ 
+          error: 'Failed to post to Twitter', 
+          details: responseData 
+        }, { status: postRes.status });
+      }
+
+      // Wait before retry: 2s, 5s, 10s
+      if (attempt < MAX_RETRIES) {
+        const delay = attempt === 1 ? 2000 : attempt === 2 ? 5000 : 10000;
+        console.log(`Waiting ${delay}ms before retry...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
     }
-    
-    console.log('Twitter post successful:', responseData);
-    return NextResponse.json({ success: true, post: responseData });
+
+    // All retries failed — if we had media, try once without media
+    if (mediaIds.length > 0) {
+      console.log('All retries with media failed. Attempting tweet without media...');
+      const fallbackBody = { text };
+      const fallbackAuth = generateOAuthHeader('POST', url);
+      const fallbackRes = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': fallbackAuth,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(fallbackBody),
+      });
+
+      if (fallbackRes.ok) {
+        const fallbackData = await fallbackRes.json();
+        console.log('Twitter post successful (without media):', fallbackData);
+        return NextResponse.json({ success: true, post: fallbackData, note: 'Posted without media due to API errors' });
+      }
+    }
+
+    // Final failure
+    console.error('All Twitter posting attempts failed');
+    return NextResponse.json({ 
+      error: 'Failed to post to Twitter after multiple attempts', 
+      details: lastError 
+    }, { status: lastStatus });
   } catch (error) {
     console.error('Twitter posting error:', error);
     return NextResponse.json({ 
