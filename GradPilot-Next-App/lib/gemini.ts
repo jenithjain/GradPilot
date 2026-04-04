@@ -19,14 +19,14 @@ export const getReasoningModel = () => {
   });
 };
 
-// General text: Gemini 2.5 Pro with reduced tokens for faster execution
+// General text: Gemini 2.5 Pro for campaign node execution
 export const getFlashModel = () => {
   return genAI.getGenerativeModel({
     model: 'gemini-2.5-pro',
     generationConfig: {
       temperature: 0.95,
       topP: 0.95,
-      maxOutputTokens: 2048, // Reduced from 8192 for faster response
+      maxOutputTokens: 8192,
     },
   });
 };
