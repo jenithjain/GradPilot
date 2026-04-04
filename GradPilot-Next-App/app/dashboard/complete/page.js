@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -16,29 +17,23 @@ import {
   Brain, TrendingUp, Calendar, Mic, ChevronRight, Play, RotateCcw,
   Settings, GraduationCap, Star, BookOpen, Award, Activity,
   Globe, DollarSign, CheckCircle2, MessageSquare, BarChart2,
-  User,
+  User, Loader2, RefreshCw, MapPin, Sparkles,
 } from "lucide-react";
 import JourneyPath from "@/components/JourneyPath";
 import { getCounsellingFieldValue } from "@/lib/counselling-profile";
 
-// ── Static data ──────────────────────────────────────────────────────────────
-const PROGRESS_DATA = [
-  { month: "Oct", score: 22 },
-  { month: "Nov", score: 34 },
-  { month: "Dec", score: 41 },
-  { month: "Jan", score: 53 },
-  { month: "Feb", score: 62 },
-  { month: "Mar", score: 73 },
-  { month: "Apr", score: 81 },
-];
-
-const SESSIONS = [
-  { date: "Apr 8",  time: "3:00 PM", topic: "University Selection Strategy", color: "bg-cyan-500",   glow: "shadow-cyan-500/60",   status: "upcoming" },
-  { date: "Apr 15", time: "4:30 PM", topic: "SOP & LOR Guidance",            color: "bg-violet-500", glow: "shadow-violet-500/60", status: "scheduled" },
-  { date: "Apr 22", time: "2:00 PM", topic: "Visa Application Workshop",      color: "bg-indigo-500", glow: "shadow-indigo-500/60", status: "scheduled" },
-];
+const ElevenLabsVoiceAgent = dynamic(
+  () => import("@/components/ElevenLabsVoiceAgent"),
+  { ssr: false }
+);
 
 const PIE_COLORS = ["#10b981", "#0ea5e9", "#8b5cf6", "#f59e0b", "#ef4444", "#ec4899"];
+
+const SESSION_COLORS = [
+  { color: "bg-cyan-500", glow: "shadow-cyan-500/60" },
+  { color: "bg-violet-500", glow: "shadow-violet-500/60" },
+  { color: "bg-indigo-500", glow: "shadow-indigo-500/60" },
+];
 
 
 
@@ -144,34 +139,21 @@ function RadialScore({ value, label, color, delay = 0 }) {
   );
 }
 
-// ── Waveform ──────────────────────────────────────────────────────────────────
-function Waveform({ active }) {
-  return (
-    <div className="flex h-10 items-center justify-center gap-1">
-      {Array.from({ length: 14 }).map((_, i) => (
-        <div
-          key={i}
-          className={`rounded-full transition-all duration-300 ${active ? "animate-pulse" : ""}`}
-          style={{
-            width: 3,
-            height: active ? `${12 + (i % 5) * 8}px` : "6px",
-            backgroundColor: active ? `hsl(${185 + i * 8},85%,65%)` : "var(--muted)",
-            animationDelay: `${i * 0.05}s`,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
 // ── Main Component ───────────────────────────────────────────────────────────
 export default function CompleteDashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [avatar, setAvatar] = useState(null);
-  const [isListening, setIsListening] = useState(false);
   const [mounted, setMounted] = useState(false);
+
+  // AI analysis state
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState(null);
+
+  // Voice agent state
+  const [showVoice, setShowVoice] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -179,6 +161,30 @@ export default function CompleteDashboard() {
       const stored = localStorage.getItem("selectedAvatar");
       if (stored) setAvatar(JSON.parse(stored));
     } catch {}
+  }, []);
+
+  // Fetch AI analysis from Gemini
+  const fetchAnalysis = useCallback(async (profileData) => {
+    setAnalyzing(true);
+    setAnalyzeError(null);
+    try {
+      const res = await fetch("/api/dashboard/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: profileData }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.details || errBody.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setAnalysis(data.analysis);
+    } catch (err) {
+      console.error("[Dashboard] Analysis failed:", err);
+      setAnalyzeError(err.message);
+    } finally {
+      setAnalyzing(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -195,7 +201,10 @@ export default function CompleteDashboard() {
           router.push("/dashboard");
           return;
         }
-        setProfile(data.studentProfile || {});
+        const p = data.studentProfile || {};
+        setProfile(p);
+        // Trigger Gemini analysis
+        fetchAnalysis(p);
       } catch {
         router.push("/dashboard");
       } finally {
@@ -203,7 +212,21 @@ export default function CompleteDashboard() {
       }
     }
     fetchProfile();
-  }, [router]);
+  }, [router, fetchAnalysis]);
+
+  // After voice conversation, re-fetch profile and re-analyze
+  const handleVoiceComplete = useCallback(async () => {
+    setShowVoice(false);
+    try {
+      const res = await fetch("/api/kyc", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        const p = data.studentProfile || {};
+        setProfile(p);
+        fetchAnalysis(p);
+      }
+    } catch {}
+  }, [fetchAnalysis]);
 
   if (loading || !profile) {
     return (
@@ -217,6 +240,11 @@ export default function CompleteDashboard() {
   }
 
   const d = deriveDisplayData(profile);
+
+  // ── AI-powered dynamic data (falls back to derived data if analysis not ready) ──
+  const ai = analysis || {};
+  const aiInsightData = ai.aiInsight || {};
+  const aiRadar = ai.radarScores || {};
 
   const avatarAccents = {
     1: "from-lime-400 to-emerald-500",
@@ -233,56 +261,102 @@ export default function CompleteDashboard() {
     ? avatarAccents[avatar.id] || avatarAccents[avatar.name?.toLowerCase()] || "from-emerald-400 to-teal-500"
     : "from-emerald-400 to-teal-500";
 
-  const aiInsightBody = d.needsTest
-    ? `Language test (IELTS/TOEFL) is your primary gap. Clearing Band 7 unlocks ${d.matchCount}+ additional options for ${d.course}.`
-    : d.readinessScore >= 75
-    ? `Profile aligned for ${d.course} in ${d.primaryCountry}. Focus on strengthening your SOP and securing strong reference letters.`
-    : `Core profile is developing. Finalise your intake preferences and institution shortlist to sharpen your matches.`;
+  // AI-powered insight text (falls back to derived)
+  const aiInsightHeadline = aiInsightData.headline || (
+    d.readinessScore >= 75
+      ? `Your profile shows strong potential for ${d.primaryCountry} universities.`
+      : d.needsTest
+      ? `Your core profile is solid. Language test is your primary gap.`
+      : `Your profile is on track. Build your shortlist and application documents.`
+  );
+  const aiInsightBody = aiInsightData.body || (
+    d.needsTest
+      ? `Language test (IELTS/TOEFL) is your primary gap. Clearing Band 7 unlocks ${d.matchCount}+ additional options for ${d.course}.`
+      : d.readinessScore >= 75
+      ? `Profile aligned for ${d.course} in ${d.primaryCountry}. Focus on strengthening your SOP and securing strong reference letters.`
+      : `Core profile is developing. Finalise your intake preferences and institution shortlist to sharpen your matches.`
+  );
 
-  const topPickLabel = !d.needsTest
-    ? `Strong shortlist candidate for ${d.primaryCountry} universities`
-    : `IELTS clearance will unlock top universities in ${d.primaryCountry}`;
+  const topPickLabel = aiInsightData.topPickLabel || (
+    !d.needsTest
+      ? `Strong shortlist candidate for ${d.primaryCountry} universities`
+      : `IELTS clearance will unlock top universities in ${d.primaryCountry}`
+  );
 
-  const recommendations = [
-    {
-      id: 1, icon: GraduationCap,
-      iconBg: "bg-blue-500/15", iconCls: "text-blue-500 dark:text-blue-400",
-      title: `Top University in ${d.primaryCountry}`,
-      tag: `${Math.min(d.readinessScore + 7, 97)}% Match`,
-      tagCls: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
-      desc: `${d.course} — ${d.timeline !== "In Progress" ? d.timeline : "Next"} intake`,
-      cta: "View Details",
-      gradient: "from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30",
-      border: "border-blue-200/60 dark:border-blue-800/40",
-    },
-    {
-      id: 2, icon: BookOpen,
-      iconBg: d.needsTest ? "bg-rose-500/15" : "bg-emerald-500/15",
-      iconCls: d.needsTest ? "text-rose-500 dark:text-rose-400" : "text-emerald-500 dark:text-emerald-400",
-      title: d.needsTest ? "Language Test Preparation" : "Application Documents",
-      tag: d.needsTest ? "Urgent" : "Next Step",
-      tagCls: d.needsTest ? "bg-rose-500/15 text-rose-600 dark:text-rose-400" : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-      desc: d.needsTest
-        ? `Band 7.0 target — required for ${d.primaryCountry} universities`
-        : "SOP & recommendation letters — your next milestone",
-      cta: d.needsTest ? "Start Prep" : "Begin Writing",
-      gradient: d.needsTest
-        ? "from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30"
-        : "from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30",
-      border: d.needsTest ? "border-rose-200/60 dark:border-rose-800/40" : "border-emerald-200/60 dark:border-emerald-800/40",
-    },
-    {
-      id: 3, icon: Award,
-      iconBg: "bg-amber-500/15", iconCls: "text-amber-500 dark:text-amber-400",
-      title: "Scholarship Opportunities",
-      tag: "Explore",
-      tagCls: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-      desc: `Financial aid options for ${d.primaryCountry} study`,
-      cta: "Apply Now",
-      gradient: "from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30",
-      border: "border-amber-200/60 dark:border-amber-800/40",
-    },
+  const matchCount = aiInsightData.matchCount ?? d.matchCount;
+  const avgFit = aiInsightData.avgFit ?? d.avgFit;
+  const urgentCount = aiInsightData.urgentCount ?? d.urgentCount;
+
+  // AI-powered radar data
+  const radarData = [
+    { subject: "Academics", A: aiRadar.academics ?? d.radarData[0]?.A ?? 50 },
+    { subject: "Language", A: aiRadar.language ?? d.radarData[1]?.A ?? 50 },
+    { subject: "Finances", A: aiRadar.finances ?? d.radarData[2]?.A ?? 50 },
+    { subject: "Clarity", A: aiRadar.clarity ?? d.radarData[3]?.A ?? 50 },
+    { subject: "Timeline", A: aiRadar.timeline ?? d.radarData[4]?.A ?? 50 },
   ];
+
+  // AI-powered budget breakdown
+  const budgetBar = ai.budgetBreakdown?.length
+    ? ai.budgetBreakdown
+    : d.budgetBar;
+
+  // AI-powered progress trend
+  const progressData = ai.progressTrend?.length
+    ? ai.progressTrend
+    : [
+        { month: "Oct", score: 22 }, { month: "Nov", score: 34 },
+        { month: "Dec", score: 41 }, { month: "Jan", score: 53 },
+        { month: "Feb", score: 62 }, { month: "Mar", score: 73 },
+        { month: "Apr", score: d.readinessScore },
+      ];
+  const trendGain = progressData.length >= 2
+    ? progressData[progressData.length - 1].score - progressData[0].score
+    : 0;
+
+  // AI-powered wellbeing scores
+  const wellbeing = ai.wellbeing || { focus: 72, confidence: 58, stress: 44, assessment: "Focus is high — ideal for tackling complex applications. Stress is manageable; maintain your momentum." };
+
+  // AI-powered recommendations (build cards from AI data)
+  const recCategoryStyles = {
+    academic:  { icon: GraduationCap, iconBg: "bg-blue-500/15", iconCls: "text-blue-500 dark:text-blue-400", gradient: "from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30", border: "border-blue-200/60 dark:border-blue-800/40" },
+    test:      { icon: BookOpen, iconBg: "bg-rose-500/15", iconCls: "text-rose-500 dark:text-rose-400", gradient: "from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30", border: "border-rose-200/60 dark:border-rose-800/40" },
+    financial: { icon: DollarSign, iconBg: "bg-emerald-500/15", iconCls: "text-emerald-500 dark:text-emerald-400", gradient: "from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30", border: "border-emerald-200/60 dark:border-emerald-800/40" },
+    documents: { icon: BookOpen, iconBg: "bg-violet-500/15", iconCls: "text-violet-500 dark:text-violet-400", gradient: "from-violet-50 to-purple-50 dark:from-violet-950/30 dark:to-purple-950/30", border: "border-violet-200/60 dark:border-violet-800/40" },
+    visa:      { icon: Globe, iconBg: "bg-amber-500/15", iconCls: "text-amber-500 dark:text-amber-400", gradient: "from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30", border: "border-amber-200/60 dark:border-amber-800/40" },
+  };
+  const urgencyTags = {
+    urgent:    { tag: "Urgent", cls: "bg-rose-500/15 text-rose-600 dark:text-rose-400" },
+    important: { tag: "Important", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+    optional:  { tag: "Optional", cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+  };
+  const recommendations = (ai.recommendations || []).slice(0, 3).map((rec, i) => {
+    const style = recCategoryStyles[rec.category] || recCategoryStyles.academic;
+    const urgency = urgencyTags[rec.urgency] || urgencyTags.important;
+    return {
+      id: i + 1, icon: style.icon,
+      iconBg: style.iconBg, iconCls: style.iconCls,
+      title: rec.title, tag: urgency.tag, tagCls: urgency.cls,
+      desc: rec.description,
+      gradient: style.gradient, border: style.border,
+    };
+  });
+  // Fallback if AI hasn't loaded yet
+  if (recommendations.length === 0) {
+    recommendations.push(
+      { id: 1, icon: GraduationCap, iconBg: "bg-blue-500/15", iconCls: "text-blue-500 dark:text-blue-400", title: `Top University in ${d.primaryCountry}`, tag: `${Math.min(d.readinessScore + 7, 97)}% Match`, tagCls: "bg-blue-500/15 text-blue-600 dark:text-blue-400", desc: `${d.course} — ${d.timeline !== "In Progress" ? d.timeline : "Next"} intake`, gradient: "from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30", border: "border-blue-200/60 dark:border-blue-800/40" },
+      { id: 2, icon: BookOpen, iconBg: "bg-rose-500/15", iconCls: "text-rose-500 dark:text-rose-400", title: "Language Test Preparation", tag: "Urgent", tagCls: "bg-rose-500/15 text-rose-600 dark:text-rose-400", desc: `Band 7.0 target — required for ${d.primaryCountry} universities`, gradient: "from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30", border: "border-rose-200/60 dark:border-rose-800/40" },
+      { id: 3, icon: Award, iconBg: "bg-amber-500/15", iconCls: "text-amber-500 dark:text-amber-400", title: "Scholarship Opportunities", tag: "Explore", tagCls: "bg-amber-500/15 text-amber-600 dark:text-amber-400", desc: `Financial aid options for ${d.primaryCountry} study`, gradient: "from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30", border: "border-amber-200/60 dark:border-amber-800/40" },
+    );
+  }
+
+  // AI-powered sessions
+  const sessions = (ai.sessions || []).slice(0, 3).map((s, i) => ({
+    topic: s.topic,
+    priority: s.priority,
+    reason: s.reason,
+    ...(SESSION_COLORS[i] || SESSION_COLORS[0]),
+  }));
 
   // Quick stat pills
   const quickStats = [
@@ -415,7 +489,7 @@ export default function CompleteDashboard() {
               </CardHeader>
               <CardContent className="px-2 pb-5">
                 <ResponsiveContainer width="100%" height={280}>
-                  <RadarChart data={d.radarData} outerRadius={95}>
+                  <RadarChart data={radarData} outerRadius={95}>
                     <PolarGrid stroke="var(--border)" />
                     <PolarAngleAxis dataKey="subject" tick={{ fontSize: 12, fontFamily: "inherit", fill: "var(--muted-foreground)", fontWeight: 700 }} />
                     <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
@@ -457,7 +531,7 @@ export default function CompleteDashboard() {
               </CardHeader>
               <CardContent className="px-3 pb-5">
                 <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={d.budgetBar} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                  <BarChart data={budgetBar} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
                     <XAxis dataKey="name" tick={{ fontSize: 12, fontFamily: "inherit", fill: "var(--muted-foreground)", fontWeight: 700 }} />
                     <YAxis tick={{ fontSize: 11, fontFamily: "inherit", fill: "var(--muted-foreground)" }} />
                     <Tooltip
@@ -489,28 +563,28 @@ export default function CompleteDashboard() {
                   <Brain className="h-5 w-5 text-violet-600 dark:text-violet-400" />
                 </div>
                 <span className="text-sm font-bold text-violet-600 dark:text-violet-400">AI Insight</span>
-                <span className="ml-auto rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/25">
-                  Live
-                </span>
+                {analyzing ? (
+                  <span className="ml-auto flex items-center gap-1.5 rounded-full bg-violet-500/15 px-2.5 py-0.5 text-xs font-bold text-violet-600 dark:text-violet-400 ring-1 ring-violet-500/25">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Analyzing...
+                  </span>
+                ) : (
+                  <span className="ml-auto rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/25">
+                    {analysis ? "Gemini 2.5 Pro" : "Live"}
+                  </span>
+                )}
               </div>
 
               <h3 className="text-xl font-black leading-snug text-foreground lg:text-2xl">
-                {d.readinessScore >= 75 ? (
-                  <>Your profile shows <span className="bg-linear-to-r from-violet-500 to-indigo-500 bg-clip-text text-transparent">strong potential</span> for {d.primaryCountry} universities.</>
-                ) : d.needsTest ? (
-                  <>Your core profile is solid. <span className="bg-linear-to-r from-rose-500 to-pink-500 bg-clip-text text-transparent">Language test</span> is your primary gap.</>
-                ) : (
-                  <>Your profile is <span className="bg-linear-to-r from-amber-500 to-orange-500 bg-clip-text text-transparent">on track</span>. Build your shortlist and application documents.</>
-                )}
+                {aiInsightHeadline}
               </h3>
               <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{aiInsightBody}</p>
 
               {/* Stats */}
               <div className="mt-6 grid grid-cols-3 gap-4">
                 {[
-                  [d.matchCount, "Matches", "text-indigo-600 dark:text-indigo-400"],
-                  [d.avgFit, "Avg Fit", "text-emerald-600 dark:text-emerald-400"],
-                  [d.urgentCount, "Urgent", "text-orange-600 dark:text-orange-400"],
+                  [matchCount, "Matches", "text-indigo-600 dark:text-indigo-400"],
+                  [avgFit, "Avg Fit", "text-emerald-600 dark:text-emerald-400"],
+                  [urgentCount, "Urgent", "text-orange-600 dark:text-orange-400"],
                 ].map(([num, label, colorCls]) => (
                   <div key={label} className="rounded-xl border border-border/50 bg-muted/30 py-4 text-center">
                     <p className={`text-3xl font-black ${colorCls}`}>{num}</p>
@@ -540,14 +614,14 @@ export default function CompleteDashboard() {
                 </div>
               </div>
               <div className="flex items-center justify-around py-2">
-                <RadialScore value={72} label="Focus" color="#3b82f6" delay={0.5} />
-                <RadialScore value={58} label="Confidence" color="#8b5cf6" delay={0.65} />
-                <RadialScore value={44} label="Stress" color="#10b981" delay={0.8} />
+                <RadialScore value={wellbeing.focus} label="Focus" color="#3b82f6" delay={0.5} />
+                <RadialScore value={wellbeing.confidence} label="Confidence" color="#8b5cf6" delay={0.65} />
+                <RadialScore value={wellbeing.stress} label="Stress" color="#10b981" delay={0.8} />
               </div>
               <div className="mt-5 rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-4 py-3">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">AI Assessment</p>
                 <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                  Focus is high — ideal for tackling complex applications. Stress is manageable; maintain your momentum.
+                  {wellbeing.assessment}
                 </p>
               </div>
             </CardContent>
@@ -562,11 +636,13 @@ export default function CompleteDashboard() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h2 className="ivy-font text-xl font-black text-foreground">Personalised Recommendations</h2>
-              <p className="ivy-font text-sm text-muted-foreground">Curated for your profile · Updated today</p>
+              <p className="ivy-font text-sm text-muted-foreground">Curated for your profile · {analysis ? "Powered by Gemini" : "Updated today"}</p>
             </div>
-            <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/20">
-              3 New
-            </span>
+            {analyzing && (
+              <span className="flex items-center gap-1.5 rounded-full bg-violet-500/10 px-3 py-1 text-xs font-bold text-violet-600 dark:text-violet-400 ring-1 ring-violet-500/20">
+                <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+              </span>
+            )}
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             {recommendations.map((rec) => (
@@ -583,7 +659,7 @@ export default function CompleteDashboard() {
                 <h3 className="text-base font-black text-foreground">{rec.title}</h3>
                 <p className="mt-1.5 text-sm text-muted-foreground">{rec.desc}</p>
                 <button className="mt-5 flex items-center gap-1 text-sm font-bold text-muted-foreground transition-colors hover:text-foreground">
-                  {rec.cta}
+                  {rec.cta || "View Details"}
                   <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
                 </button>
               </div>
@@ -601,8 +677,60 @@ export default function CompleteDashboard() {
             avatarAccent={accent}
             readinessScore={d.readinessScore}
             data={journeyData}
+            dynamicSteps={ai.journeySteps}
           />
         </motion.div>
+
+        {/* ── AI University Recommendations (from Gemini web search) ── */}
+        {(ai.universities?.length > 0) && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.38 }}
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="ivy-font text-xl font-black text-foreground">University Matches</h2>
+                <p className="ivy-font text-sm text-muted-foreground">Real universities found via Gemini web search</p>
+              </div>
+              <span className="flex items-center gap-1.5 rounded-full bg-blue-500/10 px-3 py-1 text-xs font-bold text-blue-600 dark:text-blue-400 ring-1 ring-blue-500/20">
+                <Sparkles className="h-3 w-3" /> {ai.universities.length} Found
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {ai.universities.slice(0, 8).map((uni, i) => (
+                <Card key={i} className="group border-border/40 bg-card/80 backdrop-blur-sm transition-all duration-300 hover:scale-[1.02] hover:shadow-lg">
+                  <CardContent className="p-5">
+                    <div className="mb-3 flex items-start justify-between">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/15">
+                        <GraduationCap className="h-5 w-5 text-blue-500 dark:text-blue-400" />
+                      </div>
+                      <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                        {uni.matchScore}% Match
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-black text-foreground leading-tight">{uni.name}</h3>
+                    <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <MapPin className="h-3 w-3 shrink-0" />
+                      <span>{uni.country}</span>
+                    </div>
+                    <p className="mt-2 text-xs font-medium text-muted-foreground">{uni.program}</p>
+                    {uni.tuitionRange && (
+                      <p className="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-bold">
+                        <DollarSign className="inline h-3 w-3" /> {uni.tuitionRange}
+                      </p>
+                    )}
+                    {uni.scholarships && uni.scholarships !== "Check website" && (
+                      <p className="mt-1 text-xs text-violet-600 dark:text-violet-400">
+                        <Award className="inline h-3 w-3" /> {uni.scholarships}
+                      </p>
+                    )}
+                    <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{uni.reason}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         {/* ── Voice + Follow-Up ── */}
         <motion.div
@@ -610,72 +738,95 @@ export default function CompleteDashboard() {
           transition={{ duration: 0.5, delay: 0.45 }}
           className="grid grid-cols-1 gap-5 lg:grid-cols-2"
         >
-          {/* Voice Interaction */}
+          {/* ElevenLabs Voice Agent */}
           <Card className="border-border/40 bg-linear-to-b from-cyan-50/60 to-card/90 dark:from-cyan-950/20 dark:to-card/90 backdrop-blur-sm">
             <CardContent className="p-7">
-              <div className="mb-6 flex items-center gap-2">
-                <Mic className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
-                <span className="text-sm font-bold text-muted-foreground">Voice Interaction</span>
-              </div>
-              <div className="flex flex-col items-center gap-5 py-2">
-                <div className="relative flex items-center justify-center">
-                  {isListening && (
-                    <>
-                      <span className="absolute h-28 w-28 animate-ping rounded-full bg-cyan-500/15 duration-700" />
-                      <span className="absolute h-20 w-20 animate-ping rounded-full bg-cyan-500/20" style={{ animationDelay: "0.25s" }} />
-                    </>
-                  )}
-                  <button
-                    onClick={() => setIsListening(!isListening)}
-                    className={`relative z-10 flex h-[68px] w-[68px] items-center justify-center rounded-full transition-all duration-300 ${
-                      isListening ? "scale-110 bg-cyan-500 shadow-[0_0_36px_rgba(6,182,212,0.70)]" : "bg-muted/40 hover:scale-105 hover:bg-muted/60"
-                    }`}
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Mic className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                  <span className="text-sm font-bold text-muted-foreground">AI Voice Counsellor</span>
+                </div>
+                {!showVoice && (
+                  <Button
+                    size="sm"
+                    onClick={() => setShowVoice(true)}
+                    className="h-8 gap-1.5 bg-cyan-500 text-white hover:bg-cyan-600 text-xs font-bold"
                   >
-                    <Mic className={`h-7 w-7 ${isListening ? "text-white" : "text-muted-foreground"}`} />
-                  </button>
-                </div>
-                <Waveform active={isListening} />
-                <div className="w-full min-h-[60px] rounded-xl border border-border/50 bg-muted/20 px-5 py-4">
-                  <p className="text-sm text-muted-foreground">
-                    {isListening ? "Listening... speak your question" : "Tap the mic and ask your counsellor anything"}
-                  </p>
-                </div>
+                    <Play className="h-3 w-3" /> Start Session
+                  </Button>
+                )}
               </div>
+              {showVoice ? (
+                <div className="min-h-[280px]">
+                  <ElevenLabsVoiceAgent mode="buddy" onComplete={handleVoiceComplete} />
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-5 py-6">
+                  <div className="flex h-20 w-20 items-center justify-center rounded-full bg-cyan-500/15">
+                    <Mic className="h-9 w-9 text-cyan-500" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-bold text-foreground">Talk to your AI Counsellor</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Ask questions about universities, visa, scholarships — the dashboard updates after each conversation.
+                    </p>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {/* Follow-up Tracker */}
+          {/* Follow-up Tracker — AI-powered sessions */}
           <Card className="border-border/40 bg-linear-to-b from-indigo-50/60 to-card/90 dark:from-indigo-950/20 dark:to-card/90 backdrop-blur-sm">
             <CardContent className="p-7">
               <div className="mb-6 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Calendar className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-                  <span className="text-sm font-bold text-muted-foreground">Follow-Up Tracker</span>
+                  <span className="text-sm font-bold text-muted-foreground">Recommended Sessions</span>
                 </div>
-                <Button size="sm" variant="outline" className="h-8 text-xs font-semibold text-indigo-600 dark:text-indigo-400 border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20">
-                  Launch Follow-up
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={analyzing}
+                  onClick={() => fetchAnalysis(profile)}
+                  className="h-8 gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20"
+                >
+                  <RefreshCw className={`h-3 w-3 ${analyzing ? "animate-spin" : ""}`} /> Refresh
                 </Button>
               </div>
               <div className="space-y-3">
-                {SESSIONS.map((s, i) => (
+                {sessions.length > 0 ? sessions.map((s, i) => (
                   <div key={i} className="flex items-start gap-3 rounded-xl border border-border/40 bg-muted/15 px-4 py-3.5 transition-colors hover:bg-muted/30">
                     <div className="relative mt-1 flex flex-col items-center">
                       <div className={`h-3 w-3 rounded-full ${s.color} shadow-[0_0_8px] ${s.glow}`} />
-                      {i < SESSIONS.length - 1 && <div className="mt-1.5 h-8 w-px bg-border/50" />}
+                      {i < sessions.length - 1 && <div className="mt-1.5 h-8 w-px bg-border/50" />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-bold text-foreground">{s.topic}</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{s.date} · {s.time}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{s.reason}</p>
                     </div>
                     <span className={`mt-0.5 shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                      s.status === "upcoming"
-                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-500/20"
+                      s.priority === "high"
+                        ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-1 ring-rose-500/20"
+                        : s.priority === "medium"
+                        ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20"
                         : "bg-muted/40 text-muted-foreground"
                     }`}>
-                      {s.status}
+                      {s.priority}
                     </span>
                   </div>
-                ))}
+                )) : (
+                  <div className="flex flex-col items-center gap-2 py-6 text-center">
+                    {analyzing ? (
+                      <>
+                        <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+                        <p className="text-xs text-muted-foreground">Generating session recommendations...</p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Click Refresh for AI-recommended sessions</p>
+                    )}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -696,11 +847,11 @@ export default function CompleteDashboard() {
                   </div>
                   <div className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3.5 py-1.5 ring-1 ring-emerald-500/20">
                     <TrendingUp className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">+59 pts this period</span>
+                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">+{trendGain} pts this period</span>
                   </div>
                 </div>
                 <ResponsiveContainer width="100%" height={260}>
-                  <AreaChart data={PROGRESS_DATA} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
+                  <AreaChart data={progressData} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
                     <defs>
                       <linearGradient id="completeDashAreaGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#7c3aed" stopOpacity={0.3} />
