@@ -18,8 +18,8 @@ export async function GET() {
     const workflows = await PastWorkflow.find({ userId: user._id }).sort({ createdAt: -1 }).limit(25).lean();
     return NextResponse.json({ success: true, workflows: workflows.map(w => ({
       id: w._id.toString(),
-      brief: w.brief.substring(0, 140) + (w.brief.length > 140 ? '…' : ''),
-      strategyRationale: w.strategyRationale.substring(0, 140) + (w.strategyRationale.length > 140 ? '…' : ''),
+      brief: w.brief,
+      strategyRationale: w.strategyRationale,
       createdAt: w.createdAt,
       nodesCount: w.nodes.length,
       edgesCount: w.edges.length,

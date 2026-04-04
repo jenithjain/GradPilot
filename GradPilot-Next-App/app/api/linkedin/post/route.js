@@ -21,7 +21,7 @@ export async function POST(req) {
   console.log('LinkedIn image count:', imageUrls?.length || 0);
   
   try {
-    // Get organization or user URN from token
+    // Get user URN via OpenID Connect userinfo (requires openid + profile scopes)
     const profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
       headers: { Authorization: `Bearer ${token}` },
     });
