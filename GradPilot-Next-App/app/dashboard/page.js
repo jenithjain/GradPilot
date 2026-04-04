@@ -46,39 +46,60 @@ export default function Dashboard() {
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="ivy-font mb-2 text-4xl font-bold text-foreground">
-              Student Counselling & Lead Dashboard
+              Student Dashboard
             </h1>
             <p className="ivy-font text-muted-foreground">
               AI-powered student lead qualification and counselling analytics
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Badge variant="outline" className="ivy-font px-3 py-1">
-              November 2025
-            </Badge>
-            <Button className="ivy-font bg-emerald-500 text-white hover:bg-emerald-600">
-              <Target className="mr-2 h-4 w-4" />
-              Launch Follow-up
-            </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
-        <Card className="border-border/40 bg-card/50 backdrop-blur-sm">
-          <CardContent className="flex flex-col items-center justify-center gap-6 py-16">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-linear-to-br from-emerald-400 to-teal-500 shadow-lg shadow-emerald-500/30">
-              <Rocket className="h-9 w-9 text-white" />
+        <Card className="relative overflow-hidden border-border/40 bg-card/50 backdrop-blur-sm">
+          {/* decorative background orbs */}
+          <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-emerald-500/10 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-teal-500/10 blur-3xl" />
+
+          <CardContent className="relative flex flex-col items-center justify-center gap-10 py-24 sm:py-32">
+            {/* icon */}
+            <div className="flex h-28 w-28 items-center justify-center rounded-3xl bg-linear-to-br from-emerald-400 to-teal-500 shadow-2xl shadow-emerald-500/40 ring-4 ring-emerald-500/20">
+              <Rocket className="h-14 w-14 text-white" />
             </div>
-            <div className="space-y-2 text-center">
-              <h2 className="ivy-font text-2xl font-bold text-foreground">Ready to begin?</h2>
-              <p className="ivy-font max-w-sm text-muted-foreground">
-                Set up your student profile so we can personalise your counselling journey.
+
+            {/* text */}
+            <div className="space-y-4 text-center">
+              <h2 className="ivy-font text-4xl font-extrabold text-foreground sm:text-5xl lg:text-6xl">
+                Ready to begin?
+              </h2>
+              <p className="ivy-font mx-auto max-w-xl text-lg text-muted-foreground sm:text-xl">
+                Set up your student profile so we can personalise your counselling journey and match you with the best universities.
               </p>
             </div>
+
+            {/* feature pills */}
+            <div className="flex flex-wrap justify-center gap-3">
+              {[
+                { icon: "🎓", label: "University Matching" },
+                { icon: "🗺️", label: "Personalised Roadmap" },
+                { icon: "💬", label: "AI Counselling" },
+                { icon: "📊", label: "Readiness Score" },
+              ].map(({ icon, label }) => (
+                <span
+                  key={label}
+                  className="ivy-font flex items-center gap-2 rounded-full border border-border/50 bg-muted/40 px-5 py-2 text-sm font-medium text-foreground backdrop-blur-sm"
+                >
+                  <span>{icon}</span>{label}
+                </span>
+              ))}
+            </div>
+
+            {/* CTA */}
             <Button
               onClick={() => setShowJourneyModal(true)}
-              className="bg-linear-to-r from-emerald-500 to-teal-500 px-8 py-3 text-base font-semibold text-white shadow-lg shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:from-emerald-600 hover:to-teal-600"
+              className="h-14 bg-linear-to-r from-emerald-500 to-teal-500 px-10 text-lg font-bold text-white shadow-xl shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:from-emerald-600 hover:to-teal-600"
             >
-              <Sparkles className="mr-2 h-5 w-5" />
+              <Sparkles className="mr-2.5 h-6 w-6" />
               Start Your Journey
             </Button>
           </CardContent>
@@ -159,6 +180,7 @@ export default function Dashboard() {
                 <button
                   type="button"
                   onClick={() => {
+                    try { localStorage.setItem('selectedAvatar', JSON.stringify(selectedAvatar)); } catch {}
                     closeJourneyFlow();
                     router.push("/onboarding");
                   }}
@@ -179,6 +201,7 @@ export default function Dashboard() {
                 <button
                   type="button"
                   onClick={() => {
+                    try { localStorage.setItem('selectedAvatar', JSON.stringify(selectedAvatar)); } catch {}
                     closeJourneyFlow();
                     router.push("/onboarding?mode=voice");
                   }}
