@@ -166,23 +166,37 @@ export async function PUT(request) {
       );
     }
 
-    // Save progress without marking as complete
+    // Save progress — merge with existing data
+    const merged = {
+      ...existingUser.studentProfile?.toObject?.() || {},
+      ...kycData
+    };
+
+    // Check if profile is now complete (≥5 of 6 core fields filled)
+    const coreFields = ['educationLevel', 'fieldOfStudy', 'targetCountries', 'courseInterest', 'budgetRange', 'testStatus'];
+    const filledCore = coreFields.filter((f) => {
+      const v = merged[f];
+      if (v === null || v === undefined) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      return typeof v === 'string' && v.trim() !== '';
+    }).length;
+    const isNowComplete = filledCore >= 5;
+
     const user = await User.findByIdAndUpdate(
       session.user.id,
       {
-        'studentProfile': {
-          ...existingUser.studentProfile?.toObject?.() || {},
-          ...kycData
-        },
+        studentProfile: merged,
+        ...(isNowComplete ? { hasCompletedKYC: true } : {}),
         updatedAt: new Date()
       },
-      { new: true, runValidators: false } // Don't validate on progress save
+      { new: true, runValidators: false }
     );
 
     return NextResponse.json({
       success: true,
       message: 'Progress saved successfully',
-      studentProfile: user.studentProfile
+      studentProfile: user.studentProfile,
+      hasCompletedKYC: user.hasCompletedKYC,
     });
 
   } catch (error) {
