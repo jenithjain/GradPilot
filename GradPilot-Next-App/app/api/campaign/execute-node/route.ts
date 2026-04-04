@@ -58,21 +58,47 @@ export async function POST(request: Request) {
     // Exa.ai Web Research node - searches web then analyzes with Gemini
     if (context.nodeType === 'exa_research') {
       try {
-        // Step 1: Build search queries from campaign context using Gemini
-        const queryModel = getFlashModel();
-        const queryPrompt = `Based on the following campaign context, generate 4-5 specific web search queries to find INDIVIDUAL student leads, student communities, education consultancies, and market intelligence.
+        // Get filter options from node data (checkboxes)
+        const node = (nodes as WorkflowNode[]).find(n => n.id === nodeId);
+        const nodeData = node?.data as any;
+        const filters = {
+          studentLeads: nodeData?.filters?.studentLeads !== false, // Default true
+          linkedInProfiles: nodeData?.filters?.linkedInProfiles !== false,
+          communities: nodeData?.filters?.communities !== false,
+          competitors: nodeData?.filters?.competitors !== false,
+          redditUsers: nodeData?.filters?.redditUsers !== false,
+        };
+        
+        console.log('[exa_research] Active filters:', filters);
 
-Focus on finding:
-- Individual students looking to study abroad (forums, LinkedIn posts, Reddit threads, student blogs)
-- Student communities and groups (Facebook groups, WhatsApp communities, Discord servers)
-- Education fair attendees and registrants
-- Competitor consultancy websites and their student testimonials
-- University admission pages with intake information
+        // Step 1: Build COMPREHENSIVE search queries
+        const queryModel = getFlashModel();
+        const queryPrompt = `You are a Lead Generation Expert for Fateh Education (overseas education consultancy).
 
 Campaign Brief: ${brief}
 Strategy: ${strategy}
 
-Return ONLY a JSON array of search query strings. Make queries specific with names, locations, platforms. Example: ["Indian students looking for UK university admission 2025 Reddit", "study abroad consultancy reviews students India"]`;
+Generate EXACTLY 6 HIGHLY TARGETED search queries to find REAL people with ACTUAL contact information:
+
+1. **Student Leads on Reddit** - Find students actively asking for help
+   "site:reddit.com (scholarship OR UK university OR masters abroad OR study in UK) Indian student 2025 2026"
+
+2. **LinkedIn Alumni/Professionals** - UK university graduates from India
+   "site:linkedin.com/in (MSc OR MBA OR Masters) (UK OR London OR Russell Group) Indian"
+
+3. **LinkedIn Education Consultants** - Competitors to analyze
+   "site:linkedin.com/in (education consultant OR study abroad advisor) UK India"
+
+4. **Reddit Study Abroad Communities** - For market research
+   "site:reddit.com/r (studyabroad OR Indians_StudyAbroad OR UniUK OR ukvisa)"
+
+5. **Competitor Websites** - With contact info
+   "(overseas education consultant OR UK admission consultant) India contact email phone +91"
+
+6. **High-Intent Student Posts** - Students seeking specific guidance
+   "site:reddit.com scholarship UK university Indian student need help advice"
+
+Return ONLY a JSON array of 6 query strings.`;
 
         const queryResponse = await generateWithRetry(queryModel, queryPrompt);
         let searchQueries: string[];
@@ -81,85 +107,349 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
           searchQueries = JSON.parse(cleaned);
           if (!Array.isArray(searchQueries)) throw new Error('Not an array');
         } catch {
-          // Fallback queries based on brief
           searchQueries = [
-            `${brief.substring(0, 80)} student leads education`,
-            'students looking to study abroad UK Ireland 2025 forums',
-            'overseas education consultancy student testimonials reviews',
-            'study abroad student community groups India UK',
+            'site:reddit.com (scholarship OR UK university OR masters) Indian student 2025 2026 need help',
+            'site:linkedin.com/in (MSc OR MBA OR Masters) (UK OR London OR Imperial OR LSE) Indian',
+            'site:linkedin.com/in (education consultant OR study abroad advisor) UK India',
+            'site:reddit.com/r (studyabroad OR Indians_StudyAbroad OR UniUK OR ukvisa)',
+            '(overseas education consultant OR UK admission) India contact email +91',
+            'site:reddit.com UK university scholarship Indian student advice funding',
           ];
         }
 
         console.log('[exa_research] Search queries:', searchQueries);
 
-        // Step 2: Call Exa.ai for each query category
+        // Step 2: Execute searches with maximum results
         const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
         
-        // People search for student leads
-        const peopleRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
+        const searchRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: searchQueries.slice(0, 2), category: 'people', numResults: 10 }),
+          body: JSON.stringify({ 
+            queries: searchQueries,
+            numResults: 20, // Get more results per query
+            includeText: true
+          }),
         });
-        const peopleData = await peopleRes.json();
+        const searchData = await searchRes.json();
 
-        // Company search for institutions/competitors
-        const companyRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: searchQueries.slice(0, 2), category: 'company', numResults: 10 }),
-        });
-        const companyData = await companyRes.json();
-
-        // News/general search for market intelligence
-        const newsRes = await fetch(`${baseUrl}/api/campaign/exa-research`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: searchQueries, numResults: 10 }),
-        });
-        const newsData = await newsRes.json();
-
-        // Step 3: Compile all Exa results
-        const allResults = [
-          ...(peopleData.results || []),
-          ...(companyData.results || []),
-          ...(newsData.results || []),
-        ];
-
-        const allTraces = [
-          ...(peopleData.toolTrace || []),
-          ...(companyData.toolTrace || []),
-          ...(newsData.toolTrace || []),
-        ];
+        const allResults = searchData.results || [];
+        const allTraces = searchData.toolTrace || [];
 
         console.log(`[exa_research] Total Exa results: ${allResults.length}`);
 
-        // Step 4: Build enriched prompt with Exa data
-        const exaContext = allResults.map((r: any, i: number) => {
-          const highlights = (r.highlights || []).join(' ').substring(0, 500);
-          return `[${i + 1}] ${r.title}\n    URL: ${r.url}\n    ${r.author ? `Author: ${r.author}\n    ` : ''}${r.publishedDate ? `Date: ${r.publishedDate}\n    ` : ''}Summary: ${highlights}`;
-        }).join('\n\n');
+        // Step 3: Process and categorize ALL results with DETAILED notes
+        const processedResults = allResults.map((r: any, i: number) => {
+          const extractedData = r.extractedData || {};
+          const highlights = (r.highlights || []).join(' ');
+          const text = r.text || '';
+          const url = r.url || '';
+          const title = r.title || '';
+          const titleLower = title.toLowerCase();
+          
+          // Determine TYPE based on URL and content
+          let type: 'Student Lead' | 'LinkedIn Profile' | 'Community' | 'Competitor' | 'Reddit User';
+          
+          const isLinkedIn = url.includes('linkedin.com/in/');
+          const isReddit = url.includes('reddit.com');
+          const isRedditCommunity = isReddit && url.match(/reddit\.com\/r\/[^/]+\/?$/);
+          const isRedditPost = isReddit && url.includes('/comments/');
+          const isCompetitorSite = !isLinkedIn && !isReddit && (
+            titleLower.includes('consultant') || 
+            titleLower.includes('education') ||
+            titleLower.includes('abroad') ||
+            url.includes('contact')
+          );
 
-        const enrichedPrompt = finalPrompt + `\n\n--- REAL-TIME WEB SEARCH RESULTS ---\nTool: Neural Web Search API\nQueries Used: ${searchQueries.join(' | ')}\nTotal Results Found: ${allResults.length}\n\n${exaContext}\n\n--- END OF SEARCH RESULTS ---\n\nIMPORTANT INSTRUCTIONS:\n1. Analyze ALL the above search results thoroughly\n2. In your output, include a "Raw Search Results" section that lists EVERY result with its title, URL, and a 1-2 line summary\n3. Generate a CSV-formatted lead list inside a \`\`\`csv code block with columns: Name,Type,Source URL,Relevance Score,Contact Info,Notes\n4. Be specific — name real people, real organizations, real URLs from the results\n5. Reference specific data points and URLs throughout your analysis`;
+          // Categorize
+          if (isRedditPost) {
+            // Check if it's a student seeking help
+            const content = (highlights + ' ' + title).toLowerCase();
+            const isStudentLead = content.includes('help') || content.includes('advice') || 
+                                  content.includes('scholarship') || content.includes('confused') ||
+                                  content.includes('want to study') || content.includes('planning') ||
+                                  content.includes('need guidance') || content.includes('which university');
+            type = isStudentLead ? 'Student Lead' : 'Reddit User';
+          } else if (isRedditCommunity) {
+            type = 'Community';
+          } else if (isLinkedIn) {
+            // Check if it's an education professional (competitor) or potential lead
+            const isEducationPro = titleLower.includes('consultant') || titleLower.includes('advisor') ||
+                                   titleLower.includes('counselor') || titleLower.includes('founder');
+            type = isEducationPro ? 'Competitor' : 'LinkedIn Profile';
+          } else if (isCompetitorSite) {
+            type = 'Competitor';
+          } else {
+            type = 'Reddit User';
+          }
 
-        // Step 5: Generate analysis with Gemini
+          // Extract NAME
+          let name = '';
+          if (isLinkedIn) {
+            // Extract from LinkedIn URL or title
+            const urlMatch = url.match(/linkedin\.com\/in\/([^/?]+)/);
+            if (urlMatch) {
+              name = urlMatch[1].split('-').filter((p: string) => isNaN(Number(p))).map((p: string) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+            }
+            if (!name && title) {
+              name = title.split(' - ')[0].split(' | ')[0].trim();
+            }
+          } else if (isReddit) {
+            // Extract Reddit username
+            const userMatch = title.match(/u\/([a-zA-Z0-9_-]+)/) || url.match(/user\/([a-zA-Z0-9_-]+)/) || url.match(/comments\/[^/]+\/([^/]+)/);
+            if (userMatch) {
+              name = 'u/' + userMatch[1].substring(0, 15);
+            } else if (isRedditCommunity) {
+              const subMatch = url.match(/reddit\.com\/r\/([^/]+)/);
+              name = subMatch ? 'r/' + subMatch[1] : title.substring(0, 30);
+            } else {
+              name = title.substring(0, 40);
+            }
+          } else {
+            name = title.substring(0, 50);
+          }
+
+          // Extract CONTACT INFO
+          const emails = extractedData.emails || [];
+          const phones = extractedData.phones || [];
+          let contactInfo = '';
+          
+          if (emails.length > 0) {
+            contactInfo = emails[0];
+          } else if (phones.length > 0) {
+            contactInfo = phones[0];
+          } else if (isLinkedIn && name) {
+            // Try to infer email pattern
+            const nameParts = name.toLowerCase().split(' ').filter(p => p.length > 1);
+            if (nameParts.length >= 2) {
+              contactInfo = `${nameParts[0]}.${nameParts[1]}@gmail.com (inferred)`;
+            }
+          }
+
+          // Calculate RELEVANCE SCORE (0-100)
+          let score = 50;
+          const content = (highlights + ' ' + text + ' ' + title).toLowerCase();
+          
+          // Boost for student-related content
+          if (content.includes('scholarship')) score += 15;
+          if (content.includes('uk university') || content.includes('uk education')) score += 10;
+          if (content.includes('masters') || content.includes('mba') || content.includes('msc')) score += 10;
+          if (content.includes('indian student') || content.includes('from india')) score += 10;
+          if (content.includes('help') || content.includes('advice') || content.includes('guidance')) score += 10;
+          if (content.includes('ielts') || content.includes('pte')) score += 5;
+          if (content.includes('visa')) score += 5;
+          
+          // Boost for having contact info
+          if (emails.length > 0) score += 15;
+          if (phones.length > 0) score += 10;
+          
+          // Type-based adjustments
+          if (type === 'Student Lead') score += 10;
+          if (type === 'Community') score = Math.max(score - 10, 40);
+          
+          score = Math.min(score, 100);
+
+          // Generate DETAILED NOTES
+          let notes = '';
+          if (type === 'Student Lead') {
+            if (content.includes('scholarship')) {
+              notes = `HOT LEAD - actively seeking scholarships due to financial need. Perfect for scholarship guidance.`;
+            } else if (content.includes('confused') || content.includes('help')) {
+              notes = `Student seeking guidance on study abroad process. High-potential future lead for ${new Date().getFullYear()}+.`;
+            } else if (content.includes('visa')) {
+              notes = `Student experiencing visa-related concerns. Highlights a key pain point for target audience.`;
+            } else if (content.includes('funding')) {
+              notes = `PhD/Masters candidate looking for funding options. Target for financial strategy messaging.`;
+            } else {
+              notes = `Student interested in UK education. Shows intent for study abroad counselling.`;
+            }
+          } else if (type === 'LinkedIn Profile') {
+            if (content.includes('mba') || content.includes('masters') || content.includes('msc')) {
+              notes = `Successful alumnus with UK degree. Ideal for testimonial and success story content.`;
+            } else if (content.includes('phd') || content.includes('researcher')) {
+              notes = `PhD researcher at UK university. Represents the STEM research pathway.`;
+            } else {
+              notes = `UK-educated professional. Good example of graduate success story.`;
+            }
+          } else if (type === 'Community') {
+            if (url.includes('Indians_StudyAbroad')) {
+              notes = `A dedicated subreddit for Indian students studying abroad. Prime location for market research and soft engagement.`;
+            } else if (url.includes('ukvisa')) {
+              notes = `Highly active community focused on UK visa issues. Essential for understanding visa processing challenges.`;
+            } else if (url.includes('UniUK')) {
+              notes = `Community for UK university students. Useful for insights into campus life and student satisfaction.`;
+            } else if (url.includes('studyAbroad')) {
+              notes = `Large, general community for study abroad topics. Good for understanding broad student concerns.`;
+            } else {
+              notes = `Relevant community for market research and trend monitoring.`;
+            }
+          } else if (type === 'Competitor') {
+            if (emails.length > 0 || phones.length > 0) {
+              notes = `Competitor with ${emails.length > 0 ? 'email' : 'phone'} contact. Monitor for competitive intelligence.`;
+            } else if (isLinkedIn) {
+              notes = `Founder/Director of competitor consultancy. Key profile to monitor for competitive intelligence.`;
+            } else {
+              notes = `Competitor offering similar services. Their website provides insights into service offerings and messaging.`;
+            }
+          } else {
+            notes = `User engaging with study abroad content. Potential lead with further qualification.`;
+          }
+
+          return {
+            name: name || 'Unknown',
+            type,
+            sourceUrl: url,
+            relevance: score,
+            contactInfo: contactInfo || 'See URL',
+            notes,
+            // Extra data for filtering
+            emails,
+            phones,
+            isLinkedIn,
+            isReddit,
+            isRedditCommunity: !!isRedditCommunity,
+            isCompetitor: type === 'Competitor',
+            isStudentLead: type === 'Student Lead',
+          };
+        });
+
+        // Sort by relevance
+        processedResults.sort((a: any, b: any) => b.relevance - a.relevance);
+
+        // Step 4: Apply filters and separate into categories
+        const studentLeads = processedResults.filter((r: any) => r.type === 'Student Lead');
+        const linkedInProfiles = processedResults.filter((r: any) => r.type === 'LinkedIn Profile');
+        const communities = processedResults.filter((r: any) => r.type === 'Community');
+        const competitors = processedResults.filter((r: any) => r.type === 'Competitor');
+        const redditUsers = processedResults.filter((r: any) => r.type === 'Reddit User');
+
+        // Step 5: Build CSV based on filters - WITH Email column for email agent
+        const csvHeader = 'Name,Type,Source URL,Relevance,Email,Phone,Contact Info,Notes';
+        let csvRows: string[] = [];
+        
+        const buildCsvRow = (r: any) => {
+          const email = r.emails && r.emails.length > 0 ? r.emails[0] : '';
+          const phone = r.phones && r.phones.length > 0 ? r.phones[0] : '';
+          return `"${r.name}","${r.type}","${r.sourceUrl}","${r.relevance}","${email}","${phone}","${r.contactInfo}","${r.notes.replace(/"/g, '""')}"`;
+        };
+        
+        if (filters.studentLeads) {
+          studentLeads.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.linkedInProfiles) {
+          linkedInProfiles.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.communities) {
+          communities.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.competitors) {
+          competitors.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+        if (filters.redditUsers) {
+          redditUsers.forEach((r: any) => csvRows.push(buildCsvRow(r)));
+        }
+
+        // Sort CSV by relevance
+        csvRows.sort((a, b) => {
+          const scoreA = parseInt(a.match(/"(\d+)"/g)?.[1]?.replace(/"/g, '') || '0');
+          const scoreB = parseInt(b.match(/"(\d+)"/g)?.[1]?.replace(/"/g, '') || '0');
+          return scoreB - scoreA;
+        });
+
+        const fullCSV = csvHeader + '\n' + csvRows.join('\n');
+
+        // Step 6: Generate Gemini analysis with the structured data
+        const analysisPrompt = `You are a Lead Generation Analyst for Fateh Education. Analyze the following research data and provide insights.
+
+## RAW DATA SUMMARY
+- Total Results: ${processedResults.length}
+- Student Leads: ${studentLeads.length}
+- LinkedIn Profiles: ${linkedInProfiles.length}
+- Communities: ${communities.length}
+- Competitors: ${competitors.length}
+- Reddit Users: ${redditUsers.length}
+
+## TOP STUDENT LEADS (for email outreach)
+${studentLeads.slice(0, 10).map((r: any, i: number) => `${i+1}. ${r.name} (Score: ${r.relevance}) - ${r.contactInfo !== 'See URL' ? r.contactInfo : 'No direct contact'}`).join('\n')}
+
+## KEY INSIGHTS
+Provide 3-5 actionable insights based on this data for Fateh Education's student outreach campaign.
+
+## RECOMMENDED ACTIONS
+List specific next steps for the marketing team.
+
+Keep your response concise and actionable.`;
+
         const textModel = getFlashModel();
-        const analysis = await generateWithRetry(textModel, enrichedPrompt);
+        const analysis = await generateWithRetry(textModel, analysisPrompt);
 
-        // Step 6: Prepend tool trace to output
-        const toolTraceBlock = `### 🛠️ Web Search Tool Calls\n${allTraces.map(t => `\`${t}\``).join('\n')}\n\n---\n\n`;
+        // Step 7: Build comprehensive output
+        const traceList = allTraces.map((t: string) => `- ${t}`).join('\n');
+        const topLeadsList = studentLeads.filter((r: any) => r.contactInfo !== 'See URL').slice(0, 10).map((r: any, i: number) => 
+          `${i+1}. **${r.name}** (Score: ${r.relevance})\n   📧 ${r.contactInfo}\n   📝 ${r.notes}`
+        ).join('\n\n') || 'No student leads with direct contact found.';
+        const emailLeadsList = studentLeads.filter((r: any) => r.emails && r.emails.length > 0).map((r: any) => 
+          `- ${r.name}: ${r.emails[0]}`
+        ).join('\n') || 'No leads with verified emails found. Use LinkedIn outreach instead.';
+
+        const output = `## 🔍 Lead Research Report
+
+### 🛠️ Search Queries Executed
+${traceList}
+
+### 📊 Results Overview
+| Category | Count |
+|----------|-------|
+| **Student Leads** | **${studentLeads.length}** |
+| LinkedIn Profiles | ${linkedInProfiles.length} |
+| Communities | ${communities.length} |
+| Competitors | ${competitors.length} |
+| Reddit Users | ${redditUsers.length} |
+| **Total** | **${processedResults.length}** |
+
+### 🔥 Top Student Leads (with contact info)
+${topLeadsList}
+
+### 📈 Analysis
+${analysis}
+
+---
+
+### 📥 FULL CSV DATA (${csvRows.length} rows)
+\`\`\`csv
+${fullCSV}
+\`\`\`
+
+---
+
+### 📧 Leads Ready for Email Outreach
+${emailLeadsList}
+`;
+
+        // Store student leads with emails for email agent
+        const emailableLeads = studentLeads.filter((r: any) => r.emails && r.emails.length > 0);
 
         response = NextResponse.json({
           success: true,
-          output: toolTraceBlock + analysis,
+          output,
           nodeId,
+          metadata: {
+            totalResults: processedResults.length,
+            studentLeads: studentLeads.length,
+            emailableLeads: emailableLeads.length,
+            leadsWithEmail: emailableLeads.map((r: any) => ({
+              name: r.name,
+              email: r.emails[0],
+              score: r.relevance,
+            })),
+          },
         });
         return response;
       } catch (err: any) {
         console.error('[exa_research] Error:', err);
         response = NextResponse.json({
           success: true,
-          output: `⚠️ Web research failed: ${err.message}. Falling back to general research.`,
+          output: `⚠️ Web research failed: ${err.message}. Please try again.`,
           nodeId,
         });
         return response;
@@ -511,14 +801,124 @@ Team Fateh Education`;
           htmlPreview: emailData.html?.substring(0, 150),
         });
 
-        // Get email list from node data (should be uploaded via UI)
+        // Get email list - FIRST try from incoming edges (Web Research output), then from node data
         const node = (nodes as WorkflowNode[]).find(n => n.id === nodeId);
-        const emailList = (node?.data as any)?.emailList;
+        let emailList = (node?.data as any)?.emailList;
+        
+        // AGENTIC: Auto-find Web Research outputs from ANY node in the workflow (no manual connections needed!)
+        if (!emailList || !Array.isArray(emailList) || emailList.length === 0) {
+          console.log('[email] 🤖 AGENTIC MODE: Searching all nodes for Web Research outputs...');
+          
+          // Search through ALL nodes for exa_research type with completed output
+          const webResearchNodes = (nodes as WorkflowNode[]).filter(n => {
+            const nodeType = n.data?.type || n.type;
+            return nodeType === 'exa_research' && n.data?.output && n.data?.status === 'complete';
+          });
+          
+          console.log(`[email] Found ${webResearchNodes.length} completed Web Research node(s)`);
+          
+          for (const sourceNode of webResearchNodes) {
+            console.log('[email] Processing Web Research node:', sourceNode.id);
+            const output = sourceNode.data.output as string;
+            
+            console.log('[email] Output length:', output.length);
+            
+            // Extract CSV from output (look for csv code block)
+            const csvMatch = output.match(/```csv\s*([\s\S]*?)```/);
+            if (csvMatch) {
+              const csvContent = csvMatch[1].trim();
+              const lines = csvContent.split('\n').filter(l => l.trim());
+              
+              console.log('[email] Found CSV with', lines.length, 'lines');
+              
+              if (lines.length > 1) {
+                // Parse CSV header to find email column
+                  const header = lines[0].toLowerCase();
+                  const cols = header.split(',').map(c => c.replace(/"/g, '').trim());
+                  
+                  // Look for Email column first, then Contact Info as fallback
+                  let emailColIdx = cols.findIndex(c => c === 'email');
+                  const contactColIdx = cols.findIndex(c => c === 'contact info');
+                  const nameColIdx = cols.findIndex(c => c === 'name');
+                  const typeColIdx = cols.findIndex(c => c === 'type');
+                  
+                  if (emailColIdx !== -1 || contactColIdx !== -1) {
+                    const extractedList: { email: string; name?: string }[] = [];
+                    
+                    for (let i = 1; i < lines.length; i++) {
+                      // Simple CSV parse (handles quoted fields)
+                      const values: string[] = [];
+                      let current = '';
+                      let inQuotes = false;
+                      
+                      for (const char of lines[i]) {
+                        if (char === '"') {
+                          inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                          values.push(current.trim());
+                          current = '';
+                        } else {
+                          current += char;
+                        }
+                      }
+                      values.push(current.trim());
+                      
+                      // Only send emails to Student Leads
+                      const type = typeColIdx !== -1 ? values[typeColIdx]?.replace(/"/g, '').trim() : '';
+                      if (type && !type.toLowerCase().includes('student')) {
+                        continue; // Skip non-student leads
+                      }
+                      
+                      // Get email from Email column or Contact Info column
+                      let email = '';
+                      if (emailColIdx !== -1) {
+                        email = values[emailColIdx]?.replace(/"/g, '').trim();
+                      }
+                      if (!email && contactColIdx !== -1) {
+                        const contact = values[contactColIdx]?.replace(/"/g, '').trim();
+                        if (contact && contact.includes('@') && !contact.toLowerCase().includes('inferred')) {
+                          email = contact;
+                        }
+                      }
+                      
+                      const name = nameColIdx !== -1 ? values[nameColIdx]?.replace(/"/g, '').trim() : undefined;
+                      
+                      // Validate email - must have @ and not be placeholder
+                      if (email && email.includes('@') && !email.includes('See URL') && !email.includes('(inferred)')) {
+                        extractedList.push({ email, name: name || undefined });
+                      }
+                    }
+                    
+                    if (extractedList.length > 0) {
+                      emailList = extractedList;
+                      console.log(`[email] ✅ Auto-extracted ${emailList.length} student lead emails from Web Research output`);
+                    } else {
+                      console.log('[email] ⚠️ No valid emails found in CSV (all were filtered or invalid)');
+                    }
+                  } else {
+                    console.log('[email] ⚠️ Email or Contact Info column not found in CSV');
+                }
+              } else {
+                console.log('[email] ⚠️ CSV has no data rows (only header)');
+              }
+            } else {
+              console.log('[email] ⚠️ No CSV code block found in output');
+            }
+          }
+        }
+        
+        console.log('[email] 🎯 Final emailList length:', emailList?.length || 0);
 
         if (!emailList || !Array.isArray(emailList) || emailList.length === 0) {
+          // Return helpful output with instructions
+          const webResearchCount = (nodes as WorkflowNode[]).filter(n => (n.data?.type || n.type) === 'exa_research').length;
+          const debugInfo = webResearchCount > 0 ? 
+            `\n\n🔍 Found ${webResearchCount} Web Research node(s) in workflow, but no valid Student Lead emails extracted. Make sure Web Research has completed successfully.` : 
+            '\n\n💡 Add a Web Research node to your workflow and run it first to extract leads automatically!';
+          
           response = NextResponse.json({ 
-            success: true, 
-            output: `✉️ Email content generated:\n\nSubject: ${emailData.subject}\n\n⚠️ No email list uploaded. Please upload a CSV file with email addresses to send this campaign.\n\nPreview:\n${emailData.text?.substring(0, 200) || emailData.html?.substring(0, 200)}...`,
+            success: true,
+            output: `✉️ Email Campaign Ready!\n\n**Subject:** ${emailData.subject}\n\n⚠️ **No email recipients found**${debugInfo}\n\n**🤖 AGENTIC MODE:** This email agent automatically searches for completed Web Research outputs in your workflow - no manual connections needed!\n\n**To send this campaign:**\n1. Add a Web Research node and run it first (it will find student leads with emails)\n2. Then run this Email node - it will automatically use those leads!\n\n**Preview:**\n${emailData.text?.substring(0, 300) || emailData.html?.substring(0, 300)}...\n\n---\n📧 *Emails are sent only to Student Leads, not competitors or communities*`,
             nodeId,
             metadata: emailData,
           });

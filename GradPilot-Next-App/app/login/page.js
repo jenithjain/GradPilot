@@ -135,7 +135,6 @@ export default function LoginPage() {
     try {
       await signIn("google", { 
         callbackUrl: "/dashboard"
-        callbackUrl: "/dashboard"
       });
     } catch (err) {
       console.error("Google auth error:", err);

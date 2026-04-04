@@ -36,6 +36,7 @@
     "nanoid": "^5.1.6",
     "next": "^16.2.2",
     "next-auth": "^4.24.13",
+    "nodemailer": "^7.0.13",
     "papaparse": "^5.5.3",
     "pdf-parse": "^1.1.4",
     "react": "19.2.0",
@@ -57,6 +58,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "24.10.1",
+    "@types/nodemailer": "^7.0.11",
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.0.0",

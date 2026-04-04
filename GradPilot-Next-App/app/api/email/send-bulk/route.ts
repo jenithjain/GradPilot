@@ -1,5 +1,26 @@
 import { NextResponse } from 'next/server';
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
+
+// Try to import Resend for primary sending, fallback to nodemailer
+let Resend: any = null;
+try {
+  Resend = require('resend').Resend;
+} catch {
+  console.log('[Email] Resend not available, using nodemailer only');
+}
+
+// Gmail transporter configuration (FALLBACK)
+// Uses App Password for authentication
+const gmailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'jenithjain09@gmail.com',
+    pass: 'hpew wnra hbin zvhz' // Gmail App Password
+  }
+});
+
+// Test email for verification - always receives a copy
+const TEST_EMAIL = 'jenithspam@gmail.com';
 
 export async function POST(request: Request) {
   try {
@@ -25,114 +46,142 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!process.env.RESEND_API_KEY) {
-      console.error('[Email] RESEND_API_KEY not found in environment variables');
-      console.error('[Email] Available env vars:', Object.keys(process.env).filter(k => k.includes('RESEND')));
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'RESEND_API_KEY not configured. Please add it to environment variables (Vercel: Settings → Environment Variables)' 
-        },
-        { status: 500 }
-      );
-    }
+    console.log('[Email] Starting email campaign');
+    console.log('[Email] Recipients:', emailList.length);
 
-    console.log('[Email] RESEND_API_KEY found, initializing Resend client');
-    
-    // Initialize Resend client with API key
-    const resend = new Resend(process.env.RESEND_API_KEY);
-
-    // Prefer a single constant sender defined in env: EMAIL_FROM="Display Name <address@domain>"
-    // This allows centralized control of the branded sender identity.
-    let fromAddress = process.env.EMAIL_FROM;
-    if (!fromAddress) {
-      // Fallback for local testing without verified domain
-      fromAddress = 'GradPilot <onboarding@resend.dev>';
-    }
-
-    // Clean up the from address - remove extra quotes if present
-    fromAddress = fromAddress.trim().replace(/^["']|["']$/g, '');
-
-    // Validate and fix format if needed
-    const angleMatch = /.+<[^<>@]+@[^<>@]+\.[^<>@]+>$/.test(fromAddress);
-    const simpleEmailMatch = /^[^<>@\s]+@[^<>@\s]+\.[^<>@\s]+$/.test(fromAddress);
-    
-    if (!angleMatch && !simpleEmailMatch) {
-      console.warn('[Email] EMAIL_FROM has invalid format, using default:', fromAddress);
-      fromAddress = 'GradPilot <onboarding@resend.dev>';
-    } else if (simpleEmailMatch && !angleMatch) {
-      // If it's just an email, wrap it in proper format
-      fromAddress = `GradPilot <${fromAddress}>`;
-    }
-
-    console.log('[Email] Using sender:', fromAddress);
-
-    // Send emails in batches to avoid rate limits
-    const batchSize = 100; // Resend allows up to 100 recipients per batch
+    // Results tracking
     const results = {
       sent: 0,
       failed: 0,
       errors: [] as string[],
+      method: 'nodemailer' as 'resend' | 'nodemailer',
     };
 
-    for (let i = 0; i < emailList.length; i += batchSize) {
-      const batch = emailList.slice(i, i + batchSize);
-      
-      // Send individual emails (to allow personalization)
-      for (const recipient of batch) {
-        try {
-          const recipientEmail = typeof recipient === 'string' ? recipient : recipient.email;
-          const recipientName = typeof recipient === 'object' ? recipient.name : '';
+    // Determine which method to use
+    const resendApiKey = process.env.RESEND_API_KEY;
+    let useResend = false;
+    let resend: any = null;
 
-          // Personalize email content if name is available
-          let personalizedHtml = html;
-          let personalizedText = text || '';
+    if (Resend && resendApiKey && !resendApiKey.includes('test')) {
+      try {
+        resend = new Resend(resendApiKey);
+        useResend = true;
+        results.method = 'resend';
+        console.log('[Email] Using Resend API');
+      } catch {
+        console.log('[Email] Resend init failed, using nodemailer');
+      }
+    } else {
+      console.log('[Email] Using nodemailer/Gmail (Resend not configured)');
+    }
 
-          if (recipientName) {
-            personalizedHtml = personalizedHtml.replace(/{{name}}/g, recipientName);
-            personalizedText = personalizedText.replace(/{{name}}/g, recipientName);
-          } else {
-            personalizedHtml = personalizedHtml.replace(/{{name}}/g, 'there');
-            personalizedText = personalizedText.replace(/{{name}}/g, 'there');
-          }
+    // First, send a test copy to jenithspam@gmail.com via Gmail
+    try {
+      const testMailOptions = {
+        from: '"GradPilot Campaign" <jenithjain09@gmail.com>',
+        to: TEST_EMAIL,
+        subject: `[TEST COPY] ${subject}`,
+        html: `<div style="background: #fffbcc; padding: 10px; margin-bottom: 20px; border-left: 4px solid #f0ad4e;">
+          <strong>⚠️ TEST COPY</strong> - This is a copy of the campaign being sent to ${emailList.length} recipients via ${useResend ? 'Resend' : 'Gmail'}.
+        </div>` + html.replace(/{{name}}/g, 'Test User'),
+        text: `[TEST COPY - Sending to ${emailList.length} recipients]\n\n` + (text || '').replace(/{{name}}/g, 'Test User'),
+      };
 
-          const { data, error } = await resend.emails.send({
-            from: fromAddress,
-            to: recipientEmail,
-            subject,
-            html: personalizedHtml,
-            text: personalizedText,
-          });
+      const testInfo = await gmailTransporter.sendMail(testMailOptions);
+      console.log(`[Email] ✅ Test copy sent to ${TEST_EMAIL}:`, testInfo.messageId);
+    } catch (testErr: any) {
+      console.error('[Email] Failed to send test copy:', testErr.message);
+    }
 
-          if (error) {
-            throw error;
-          }
+    // Send to all recipients
+    for (const recipient of emailList) {
+      try {
+        const recipientEmail = typeof recipient === 'string' ? recipient : recipient.email;
+        const recipientName = typeof recipient === 'object' ? recipient.name : '';
 
-          console.log(`[Email] Sent to ${recipientEmail}:`, data?.id);
-          results.sent++;
-        } catch (err: any) {
+        // Skip invalid emails
+        if (!recipientEmail || !recipientEmail.includes('@')) {
+          console.warn('[Email] Skipping invalid email:', recipientEmail);
           results.failed++;
-          const errorMsg = err?.message || err?.error || 'Unknown error';
-          const errorDetail = `Failed to send to ${typeof recipient === 'string' ? recipient : recipient.email}: ${errorMsg}`;
-          results.errors.push(errorDetail);
-          console.error('[Email] Send error:', errorDetail, err);
+          results.errors.push(`Invalid email: ${recipientEmail}`);
+          continue;
         }
 
-        // Rate limiting: Wait 500ms between emails to avoid hitting API limits (2 req/sec = 500ms)
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Personalize email content
+        let personalizedHtml = html;
+        let personalizedText = text || '';
+
+        if (recipientName) {
+          personalizedHtml = personalizedHtml.replace(/{{name}}/g, recipientName);
+          personalizedText = personalizedText.replace(/{{name}}/g, recipientName);
+        } else {
+          personalizedHtml = personalizedHtml.replace(/{{name}}/g, 'there');
+          personalizedText = personalizedText.replace(/{{name}}/g, 'there');
+        }
+
+        // Try Resend first, fallback to nodemailer
+        let sent = false;
+        
+        if (useResend && resend) {
+          try {
+            const { data, error } = await resend.emails.send({
+              from: process.env.EMAIL_FROM || 'GradPilot <onboarding@resend.dev>',
+              to: recipientEmail,
+              subject: subject,
+              html: personalizedHtml,
+              text: personalizedText,
+            });
+            
+            if (error) throw error;
+            console.log(`[Email] ✅ Sent via Resend to ${recipientEmail}:`, data?.id);
+            results.sent++;
+            sent = true;
+          } catch (resendErr: any) {
+            console.log(`[Email] Resend failed for ${recipientEmail}, trying Gmail:`, resendErr.message);
+          }
+        }
+
+        // Fallback to Gmail/nodemailer
+        if (!sent) {
+          const mailOptions = {
+            from: '"GradPilot - Fateh Education" <jenithjain09@gmail.com>',
+            to: recipientEmail,
+            subject: subject,
+            html: personalizedHtml,
+            text: personalizedText,
+          };
+
+          const info = await gmailTransporter.sendMail(mailOptions);
+          console.log(`[Email] ✅ Sent via Gmail to ${recipientEmail}:`, info.messageId);
+          results.sent++;
+          if (results.method === 'resend') results.method = 'nodemailer'; // Mark as fallback used
+        }
+
+        // Rate limiting
+        await new Promise(resolve => setTimeout(resolve, useResend ? 500 : 1000));
+
+      } catch (err: any) {
+        results.failed++;
+        const errorMsg = err?.message || 'Unknown error';
+        const errorDetail = `Failed to send to ${typeof recipient === 'string' ? recipient : recipient.email}: ${errorMsg}`;
+        results.errors.push(errorDetail);
+        console.error('[Email] ❌ Send error:', errorDetail);
       }
     }
+
+    console.log(`[Email] Campaign complete: ${results.sent} sent, ${results.failed} failed`);
 
     return NextResponse.json({
       success: true,
       sent: results.sent,
       failed: results.failed,
       total: emailList.length,
-      errors: results.errors.length > 0 ? results.errors.slice(0, 10) : undefined, // Return first 10 errors
+      testEmailSent: TEST_EMAIL,
+      errors: results.errors.length > 0 ? results.errors.slice(0, 10) : undefined,
     });
 
   } catch (error) {
-    console.error('Error sending bulk emails:', error);
+    console.error('[Email] Error sending bulk emails:', error);
     return NextResponse.json(
       { 
         success: false, 
