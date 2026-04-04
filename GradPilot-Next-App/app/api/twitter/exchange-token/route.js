@@ -14,6 +14,13 @@ export async function POST(request) {
     const clientId = process.env.TWITTER_CLIENT_ID;
     const redirectUri = process.env.TWITTER_TOKEN_REDIRECT_URI || 'http://localhost:3000/get-tokens/twitter/callback';
 
+    if (!clientId) {
+      return NextResponse.json(
+        { error: 'TWITTER_CLIENT_ID is required' },
+        { status: 500 }
+      );
+    }
+
     // Exchange code for access token
     const tokenResponse = await fetch('https://api.twitter.com/2/oauth2/token', {
       method: 'POST',

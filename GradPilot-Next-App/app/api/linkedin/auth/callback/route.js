@@ -14,7 +14,7 @@ export async function GET(req) {
   const code = searchParams.get('code');
   const state = searchParams.get('state');
   if (!code) {
-    return NextResponse.redirect('/profile?error=linkedin_auth_failed');
+    return NextResponse.redirect(new URL('/profile?error=linkedin_auth_failed', req.url));
   }
   // Exchange code for access token
   const tokenRes = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
@@ -30,7 +30,7 @@ export async function GET(req) {
   });
   const tokenData = await tokenRes.json();
   if (!tokenData.access_token) {
-    return NextResponse.redirect('/profile?error=linkedin_token_failed');
+    return NextResponse.redirect(new URL('/profile?error=linkedin_token_failed', req.url));
   }
   
   // Store token in user's account
@@ -50,5 +50,5 @@ export async function GET(req) {
     console.error('Error storing LinkedIn token:', error);
   }
   
-  return NextResponse.redirect('/profile?linkedin=connected');
+  return NextResponse.redirect(new URL('/profile?linkedin=connected', req.url));
 }

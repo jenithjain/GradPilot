@@ -12,7 +12,9 @@ export async function GET() {
     }
 
     await dbConnect();
-    const user = await User.findById(session.user.id).select('+socialTokens');
+    const user = await User.findById(session.user.id)
+      .select('+socialTokens.linkedin.access_token +socialTokens.twitter.access_token')
+      .lean();
 
     const linkedin = !!(user?.socialTokens?.linkedin?.access_token);
     const twitter = !!(user?.socialTokens?.twitter?.access_token);

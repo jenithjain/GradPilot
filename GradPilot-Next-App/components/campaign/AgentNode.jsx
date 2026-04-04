@@ -465,7 +465,7 @@ function AgentNode({ data, id }) {
                                         body: JSON.stringify({
                                           prompt: scene.prompt,
                                           aspectRatio: scene.aspectRatio || '16:9',
-                                          duration: scene.duration || 5,
+                                          duration: scene.duration || 10,
                                           sceneName: scene.sceneName,
                                           promptIndex: idx,
                                           promptKey: `prompt_${idx}`,

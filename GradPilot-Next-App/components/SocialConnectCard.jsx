@@ -19,10 +19,14 @@ export default function SocialConnectCard() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('linkedin') === 'connected') {
       toast.success('LinkedIn connected successfully!');
+      // Re-check status after callback persistence.
+      setTimeout(() => checkConnectionStatus(), 300);
       window.history.replaceState({}, '', '/profile');
     }
     if (params.get('twitter') === 'connected') {
       toast.success('Twitter connected successfully!');
+      // Re-check status after callback persistence.
+      setTimeout(() => checkConnectionStatus(), 300);
       window.history.replaceState({}, '', '/profile');
     }
     if (params.get('error')) {
@@ -51,7 +55,7 @@ export default function SocialConnectCard() {
   };
 
   const handleTwitterAuth = () => {
-    window.location.href = "/api/twitter/auth";
+    window.location.href = "/api/twitter/auth?force_login=1";
   };
 
   return (
