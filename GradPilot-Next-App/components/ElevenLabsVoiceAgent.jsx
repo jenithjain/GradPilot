@@ -244,6 +244,7 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding', 
       const memoryCtx = memoryContextRef.current;
       const studentName = studentNameRef.current;
       const resumePlan = resumePlanRef.current;
+      const isReturning = resumePlan?.returningStudent;
       const resumeBrief = resumePlan
         ? [resumePlan.firstTurnGuidance, resumePlan.instructionSummary].filter(Boolean).join('\n')
         : '';
@@ -253,12 +254,31 @@ export default function ElevenLabsVoiceAgent({ onComplete, mode = 'onboarding', 
           ...(config.dynamicVariables || {}),
           student_name: studentName,
           student_memory: memoryCtx,
-          returning_student: resumePlan?.returningStudent ? 'true' : 'false',
+          returning_student: isReturning ? 'true' : 'false',
           resume_mode: resumePlan?.resumeMode || 'fresh',
           resume_focus_fields: resumePlan?.focusFields?.join(', ') || '',
           resume_brief: resumeBrief,
           skip_opening_sequence: resumePlan?.shouldSkipOpeningSequence ? 'true' : 'false',
           completion_estimate: String(resumePlan?.completionEstimate ?? ''),
+        };
+      }
+
+      // Override the first spoken message for returning students so the
+      // agent doesn't repeat the generic introduction.
+      if (isReturning && resumePlan) {
+        const focusLabels = (resumePlan.focusFields || []).slice(0, 3).join(', ');
+        const name = studentName || 'there';
+        const firstMsg =
+          resumePlan.resumeMode === 'fast-finish'
+            ? `Welcome back, ${name}! We're almost done — I just need a couple more details${focusLabels ? ` like ${focusLabels}` : ''}. Let's wrap this up quickly.`
+            : `Hey ${name}, good to have you back! I still have everything from last time. Let me pick up where we left off${focusLabels ? ` — I still need ${focusLabels}` : ''}.`;
+
+        config.overrides = {
+          ...(config.overrides || {}),
+          agent: {
+            ...(config.overrides?.agent || {}),
+            firstMessage: firstMsg,
+          },
         };
       }
     };

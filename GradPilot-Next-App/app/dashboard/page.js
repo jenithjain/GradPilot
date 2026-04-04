@@ -18,10 +18,8 @@ import {
 } from "lucide-react";
 
 const ElevenLabsVoiceAgent = dynamic(() => import('@/components/ElevenLabsVoiceAgent'), { ssr: false });
-const CounsellingConversationPanel = dynamic(() => import('@/components/CounsellingConversationPanel'), { ssr: false, loading: () => null });
 const CounsellingSidebarCard = dynamic(() => import('@/components/CounsellingSidebarCard'), { ssr: false, loading: () => null });
 const StudentProfileCard = dynamic(() => import('@/components/StudentProfileCard'), { ssr: false });
-const LiveKYCChecklist = dynamic(() => import('@/components/LiveKYCChecklist'), { ssr: false });
 
 const AVATARS = [
   { id: 1, name: "Hulk",       src: "/avatars/hulk.png",       accent: "from-lime-400 to-emerald-500",  ringColor: "ring-emerald-500", desc: "Bold and unstoppable" },
@@ -196,12 +194,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className={`grid gap-6 ${hasEditableProfile ? 'xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)]' : 'xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.8fr)]'}`}>
-            <CounsellingConversationPanel
-              conversation={latestConversation}
-              progress={counsellingProgress}
-            />
-
+          <div className="grid gap-6">
             {hasEditableProfile ? (
               <StudentProfileCard
                 onResumeCall={counsellingProgress?.isComplete ? undefined : handleResumeCall}
@@ -230,9 +223,6 @@ export default function Dashboard() {
 
         {showVoiceAgent && (
           <div className="fixed inset-0 z-50 flex bg-background">
-            <div className="hidden w-72 border-r border-border/40 lg:flex">
-              <LiveKYCChecklist active className="w-full rounded-none border-0" />
-            </div>
             <div className="relative flex-1">
               <button
                 type="button"
