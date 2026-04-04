@@ -60,19 +60,22 @@ function getTheme(isDark) {
     textPrimary:      "#ffffff",
     textSecondary:    "rgba(255,255,255,0.55)",
     textMuted:        "rgba(255,255,255,0.30)",
-    textLabel:        "rgba(255,255,255,0.25)",
+    textLabel:        "rgba(255,255,255,0.44)",
     textFaint:        "rgba(255,255,255,0.55)",
     divider:          "rgba(255,255,255,0.07)",
-    profileBg:        "linear-gradient(135deg,rgba(15,18,52,0.96) 0%,rgba(22,12,50,0.92) 50%,rgba(12,16,44,0.96) 100%)",
-    profileBorder:    "rgba(139,92,246,0.22)",
-    profileOrb1:      "radial-gradient(circle,rgba(139,92,246,0.28) 0%,transparent 70%)",
-    profileOrb2:      "radial-gradient(circle,rgba(99,102,241,0.18) 0%,transparent 70%)",
-    profileOverlay:   "0.08",
-    tagBg:            "rgba(139,92,246,0.18)",
-    tagBorder:        "rgba(139,92,246,0.28)",
-    tagText:          "#c4b5fd",
-    ringTrack:        "rgba(255,255,255,0.07)",
-    metricVal:        ["#fbbf24","#34d399","#22d3ee","#a78bfa"],
+    profileBg:        "linear-gradient(135deg,#0f0c2e 0%,#1e0a4a 40%,#0c0822 100%)",
+    profileBorder:    "rgba(167,139,250,0.42)",
+    profileOrb1:      "radial-gradient(circle,rgba(167,139,250,0.42) 0%,transparent 70%)",
+    profileOrb2:      "radial-gradient(circle,rgba(129,140,248,0.28) 0%,transparent 70%)",
+    profileOverlay:   "0.12",
+    tagBg:            "rgba(167,139,250,0.22)",
+    tagBorder:        "rgba(167,139,250,0.40)",
+    tagText:          "#ede9fe",
+    ringTrack:        "rgba(255,255,255,0.12)",
+    metricVal:        ["#fcd34d","#4ade80","#38bdf8","#c4b5fd"],
+    profileShadow:    "0 4px 48px rgba(109,40,217,0.40),0 0 0 1px rgba(167,139,250,0.25)",
+    avatarShadow:     "0 0 40px rgba(167,139,250,0.52),0 8px 28px rgba(0,0,0,0.35)",
+    profileNameText:  "#f0ecff",
     aiInsightBg:      "linear-gradient(135deg,rgba(88,28,135,0.32) 0%,rgba(67,20,120,0.26) 50%,rgba(30,27,75,0.32) 100%)",
     aiInsightBorder:  "rgba(139,92,246,0.28)",
     aiOrb1:           "radial-gradient(circle,rgba(139,92,246,0.38) 0%,transparent 70%)",
@@ -205,19 +208,22 @@ function getTheme(isDark) {
     textPrimary:      "#0f172a",
     textSecondary:    "rgba(15,23,42,0.60)",
     textMuted:        "rgba(15,23,42,0.45)",
-    textLabel:        "rgba(15,23,42,0.40)",
+    textLabel:        "rgba(15,23,42,0.55)",
     textFaint:        "rgba(15,23,42,0.60)",
     divider:          "rgba(0,0,0,0.08)",
-    profileBg:        "linear-gradient(135deg,rgba(238,242,255,0.98) 0%,rgba(245,243,255,0.95) 50%,rgba(240,245,255,0.98) 100%)",
-    profileBorder:    "rgba(109,40,217,0.18)",
-    profileOrb1:      "radial-gradient(circle,rgba(139,92,246,0.12) 0%,transparent 70%)",
-    profileOrb2:      "radial-gradient(circle,rgba(99,102,241,0.08) 0%,transparent 70%)",
-    profileOverlay:   "0.05",
-    tagBg:            "rgba(109,40,217,0.10)",
-    tagBorder:        "rgba(109,40,217,0.20)",
-    tagText:          "#6d28d9",
-    ringTrack:        "rgba(15,23,42,0.10)",
-    metricVal:        ["#d97706","#059669","#0891b2","#7c3aed"],
+    profileBg:        "linear-gradient(135deg,#f5f3ff 0%,#ede9fe 25%,#ddd6fe 60%,#e0e7ff 100%)",
+    profileBorder:    "rgba(109,40,217,0.35)",
+    profileOrb1:      "radial-gradient(circle,rgba(124,58,237,0.22) 0%,transparent 70%)",
+    profileOrb2:      "radial-gradient(circle,rgba(99,102,241,0.16) 0%,transparent 70%)",
+    profileOverlay:   "0.10",
+    tagBg:            "rgba(109,40,217,0.14)",
+    tagBorder:        "rgba(109,40,217,0.32)",
+    tagText:          "#5b21b6",
+    ringTrack:        "rgba(15,23,42,0.12)",
+    metricVal:        ["#b45309","#047857","#0369a1","#6d28d9"],
+    profileShadow:    "0 4px 32px rgba(109,40,217,0.18),0 0 0 1px rgba(109,40,217,0.14)",
+    avatarShadow:     "0 0 32px rgba(139,92,246,0.40),0 8px 20px rgba(109,40,217,0.22)",
+    profileNameText:  "#1e1b4b",
     aiInsightBg:      "linear-gradient(135deg,rgba(237,233,254,0.92) 0%,rgba(243,232,255,0.88) 50%,rgba(238,242,255,0.92) 100%)",
     aiInsightBorder:  "rgba(109,40,217,0.20)",
     aiOrb1:           "radial-gradient(circle,rgba(139,92,246,0.16) 0%,transparent 70%)",
@@ -619,7 +625,7 @@ export default function AICounsellingDashboard({ onClose, avatar, data }) {
 
           {/* ── Profile hero ── */}
           <div ref={ref(0)} className="relative overflow-hidden rounded-2xl"
-            style={{ background: T.profileBg, border: `1px solid ${T.profileBorder}` }}>
+            style={{ background: T.profileBg, border: `1px solid ${T.profileBorder}`, boxShadow: T.profileShadow }}>
             <div className={`absolute inset-0 bg-linear-to-r ${avatarAccent} opacity-[${T.profileOverlay}]`} />
             <div style={{ position: "absolute", right: "-80px", top: "-80px", width: "300px", height: "300px", borderRadius: "50%", background: T.profileOrb1 }} />
             <div style={{ position: "absolute", left: "-60px", bottom: "-60px", width: "250px", height: "250px", borderRadius: "50%", background: T.profileOrb2 }} />
@@ -631,18 +637,18 @@ export default function AICounsellingDashboard({ onClose, avatar, data }) {
                 <div className="flex items-center gap-5">
                   {avatar ? (
                     <div className={`flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br ${avatarAccent}`}
-                      style={{ boxShadow: "0 0 32px rgba(139,92,246,0.30),0 8px 24px rgba(0,0,0,0.20)" }}>
+                      style={{ boxShadow: T.avatarShadow }}>
                       <Image src={avatar.src} alt={avatar.name} width={76} height={76} className="h-full w-full object-contain drop-shadow-md" />
                     </div>
                   ) : (
                     <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl"
-                      style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)", boxShadow: "0 0 28px rgba(124,58,237,0.30)" }}>
+                      style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)", boxShadow: T.avatarShadow }}>
                       <GraduationCap className="h-8 w-8 text-white" />
                     </div>
                   )}
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold uppercase tracking-[0.22em]" style={{ color: T.textLabel }}>Student Profile</p>
-                    <h2 className="mt-1 text-2xl font-black lg:text-3xl" style={{ color: T.textPrimary }}>{displayName}</h2>
+                    <h2 className="mt-1 text-2xl font-black lg:text-3xl" style={{ color: T.profileNameText }}>{displayName}</h2>
                     <p className="mt-1 text-sm" style={{ color: T.textSecondary }}>{displayCourse}</p>
                     <div className="mt-3 flex flex-wrap gap-1.5">
                       {profileTags.map((tag) => (

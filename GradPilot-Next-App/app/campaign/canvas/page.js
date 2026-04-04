@@ -28,7 +28,8 @@ import {
   Settings2,
   Home,
   UploadCloud,
-  ZoomIn
+  ZoomIn,
+  Globe
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 // Removed ScrollArea (using native overflow containers for side panels)
@@ -69,6 +70,14 @@ export default function CampaignCanvasPage() {
   const [editingNodeOutput, setEditingNodeOutput] = useState('');
   const [editingNodeLabel, setEditingNodeLabel] = useState('');
   const [editingNodePurpose, setEditingNodePurpose] = useState('');
+  const [editingNodeType, setEditingNodeType] = useState(null); // Track node type for filter UI
+  const [editingNodeFilters, setEditingNodeFilters] = useState({ // Web Research filters
+    studentLeads: true,
+    linkedInProfiles: true,
+    communities: true,
+    competitors: true,
+    redditUsers: true,
+  });
   const [isModulesOpen, setIsModulesOpen] = useState(false);
   const [executingNodeId, setExecutingNodeId] = useState(null);
   const [modalLightboxImage, setModalLightboxImage] = useState(null);
@@ -87,6 +96,7 @@ export default function CampaignCanvasPage() {
     setWorkflow,
     updateNodePrompt,
     updateNodeStatus,
+    updateNodeData,
   } = useCampaignStore();
 
   const [nodes, setNodes, rawOnNodesChange] = useNodesState(storeNodes);
@@ -107,6 +117,15 @@ export default function CampaignCanvasPage() {
           setEditingNodePurpose(
             n.data.description || n.data.promptContext || 'Configure prompts and view this agent\'s output.'
           );
+          setEditingNodeType(n.data.type || null);
+          // Load existing filters or use defaults
+          setEditingNodeFilters(n.data.filters || {
+            studentLeads: true,
+            linkedInProfiles: true,
+            communities: true,
+            competitors: true,
+            redditUsers: true,
+          });
           setPromptModalOpen(true);
         },
         isExecuting: n.id === executingNodeId
@@ -750,8 +769,8 @@ export default function CampaignCanvasPage() {
         </ReactFlow>
         {/* Node / Workflow Settings Modal */}
         <Dialog open={promptModalOpen} onOpenChange={setPromptModalOpen}>
-          <DialogContent className="max-w-3xl w-full">
-            <DialogHeader>
+          <DialogContent className="w-[96vw] max-w-[96vw] h-[92vh] p-0 overflow-hidden flex flex-col">
+            <DialogHeader className="px-6 py-4 border-b border-border shrink-0">
               <DialogTitle>
                 {editingNodeId ? editingNodeLabel : 'Workflow Agent Prompts'}
               </DialogTitle>
@@ -760,26 +779,89 @@ export default function CampaignCanvasPage() {
               </DialogDescription>
             </DialogHeader>
             {editingNodeId ? (
-              <div className="grid md:grid-cols-2 gap-6">
+              <div className="grid md:grid-cols-2 gap-6 h-full min-h-0 px-6 py-5">
                 {/* Prompt Editor */}
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 min-h-0">
                   <h4 className="text-sm font-medium">Prompt Context</h4>
                   <Textarea
                     value={editingPrompt}
                     onChange={(e) => setEditingPrompt(e.target.value)}
-                    className="min-h-[220px] text-sm resize-none campaign-sidebar-scroll"
+                    className="flex-1 min-h-[200px] md:min-h-0 text-sm resize-none campaign-sidebar-scroll"
                     placeholder="Describe what this agent should focus on..."
                   />
-                  <div className="flex gap-2">
+                  
+                  {/* Web Research Filters - Show only for exa_research nodes */}
+                  {editingNodeType === 'exa_research' && (
+                    <div className="border border-cyan-500/30 rounded-lg p-3 bg-cyan-500/5 space-y-2">
+                      <h5 className="text-xs font-medium text-cyan-400 flex items-center gap-1.5">
+                        <Globe className="w-3.5 h-3.5" />
+                        Lead Categories (CSV Filters)
+                      </h5>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <label className="flex items-center gap-2 cursor-pointer hover:bg-cyan-500/10 p-1.5 rounded">
+                          <input
+                            type="checkbox"
+                            checked={editingNodeFilters.studentLeads}
+                            onChange={(e) => setEditingNodeFilters(prev => ({ ...prev, studentLeads: e.target.checked }))}
+                            className="rounded text-cyan-500 focus:ring-cyan-500"
+                          />
+                          <span>🎓 Student Leads</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer hover:bg-cyan-500/10 p-1.5 rounded">
+                          <input
+                            type="checkbox"
+                            checked={editingNodeFilters.linkedInProfiles}
+                            onChange={(e) => setEditingNodeFilters(prev => ({ ...prev, linkedInProfiles: e.target.checked }))}
+                            className="rounded text-cyan-500 focus:ring-cyan-500"
+                          />
+                          <span>💼 LinkedIn Profiles</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer hover:bg-cyan-500/10 p-1.5 rounded">
+                          <input
+                            type="checkbox"
+                            checked={editingNodeFilters.communities}
+                            onChange={(e) => setEditingNodeFilters(prev => ({ ...prev, communities: e.target.checked }))}
+                            className="rounded text-cyan-500 focus:ring-cyan-500"
+                          />
+                          <span>👥 Communities</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer hover:bg-cyan-500/10 p-1.5 rounded">
+                          <input
+                            type="checkbox"
+                            checked={editingNodeFilters.competitors}
+                            onChange={(e) => setEditingNodeFilters(prev => ({ ...prev, competitors: e.target.checked }))}
+                            className="rounded text-cyan-500 focus:ring-cyan-500"
+                          />
+                          <span>🏢 Competitors</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer hover:bg-cyan-500/10 p-1.5 rounded">
+                          <input
+                            type="checkbox"
+                            checked={editingNodeFilters.redditUsers}
+                            onChange={(e) => setEditingNodeFilters(prev => ({ ...prev, redditUsers: e.target.checked }))}
+                            className="rounded text-cyan-500 focus:ring-cyan-500"
+                          />
+                          <span>📣 Reddit Users</span>
+                        </label>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">Select categories to include in CSV output. Email agent only sends to Student Leads.</p>
+                    </div>
+                  )}
+                  
+                  <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
                       className="bg-emerald-500 hover:bg-emerald-600 text-white"
                       onClick={() => {
                         updateNodePrompt(editingNodeId, editingPrompt);
-                        toast.success('Prompt saved');
+                        // Also save filters for exa_research nodes
+                        if (editingNodeType === 'exa_research') {
+                          updateNodeData(editingNodeId, { filters: editingNodeFilters });
+                        }
+                        toast.success('Settings saved');
                       }}
                     >
-                      Save Prompt
+                      Save Settings
                     </Button>
                     <Button
                       size="sm"
@@ -798,9 +880,9 @@ export default function CampaignCanvasPage() {
                   </div>
                 </div>
                 {/* Output Viewer */}
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 min-h-0">
                   <h4 className="text-sm font-medium">Latest Output</h4>
-                  <ModalScrollArea className="h-[260px] rounded-md border border-border campaign-sidebar-scroll p-3 bg-muted/40">
+                  <ModalScrollArea className="flex-1 min-h-[260px] md:min-h-0 rounded-md border border-border campaign-sidebar-scroll p-3 bg-muted/40">
                     {(() => {
                       if (!editingNodeOutput) {
                         return <p className="text-xs text-muted-foreground">No output yet. Run the agent to generate content.</p>;
@@ -834,14 +916,14 @@ export default function CampaignCanvasPage() {
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{
-                              h1: ({node, ...props}) => <h1 className="text-base font-semibold mt-3 mb-2" {...props} />,
-                              h2: ({node, ...props}) => <h2 className="text-sm font-semibold mt-2 mb-1" {...props} />,
-                              h3: ({node, ...props}) => <h3 className="text-[13px] font-semibold mt-2 mb-1" {...props} />,
-                              p: ({node, ...props}) => <p className="text-[12px] leading-relaxed mb-2" {...props} />,
+                              h1: ({node, ...props}) => <h1 className="text-lg font-semibold mt-3 mb-2" {...props} />,
+                              h2: ({node, ...props}) => <h2 className="text-base font-semibold mt-2 mb-1" {...props} />,
+                              h3: ({node, ...props}) => <h3 className="text-sm font-semibold mt-2 mb-1" {...props} />,
+                              p: ({node, ...props}) => <p className="text-[13px] leading-relaxed mb-2" {...props} />,
                               ul: ({node, ...props}) => <ul className="list-disc list-inside space-y-1 mb-2" {...props} />,
                               ol: ({node, ...props}) => <ol className="list-decimal list-inside space-y-1 mb-2" {...props} />,
-                              li: ({node, ...props}) => <li className="text-[12px]" {...props} />,
-                              code: ({node, inline, ...props}) => inline ? <code className="px-1 py-0.5 rounded bg-muted text-[11px] font-mono" {...props} /> : <code className="block p-2 rounded bg-muted text-[11px] font-mono overflow-x-auto" {...props} />,
+                              li: ({node, ...props}) => <li className="text-[13px]" {...props} />,
+                              code: ({node, inline, ...props}) => inline ? <code className="px-1 py-0.5 rounded bg-muted text-[12px] font-mono" {...props} /> : <code className="block p-2 rounded bg-muted text-[12px] font-mono overflow-x-auto" {...props} />,
                               blockquote: ({node, ...props}) => <blockquote className="border-l-2 border-emerald-500 pl-3 italic" {...props} />,
                             }}
                           >
@@ -855,14 +937,15 @@ export default function CampaignCanvasPage() {
                     size="sm"
                     variant="ghost"
                     onClick={() => { setPromptModalOpen(false); setEditingNodeId(null); }}
+                    className="self-start"
                   >
                     Close
                   </Button>
                 </div>
               </div>
             ) : (
-              <ModalScrollArea className="max-h-[65vh] campaign-sidebar-scroll pr-2">
-                <div className="space-y-3">
+              <ModalScrollArea className="flex-1 min-h-0 campaign-sidebar-scroll px-6 pb-5">
+                <div className="space-y-3 pr-2">
                   {nodes.map(n => (
                     <div key={n.id} className="p-3 rounded-md border border-border bg-card space-y-2">
                       <div className="flex items-center justify-between">
