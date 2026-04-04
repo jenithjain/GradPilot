@@ -10,7 +10,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import dynamic from 'next/dynamic';
 import StaggeredMenu from '@/components/StaggeredMenu';
+const AICounsellingDashboard = dynamic(() => import('@/components/AICounsellingDashboard'), { ssr: false, loading: () => null });
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -151,6 +153,10 @@ const cardVariants = {
 
 // ── Final dashboard ───────────────────────────────────────────────────────────
 function FinalDashboard({ data, avatar, onRestart }) {
+  const [showAIDashboard, setShowAIDashboard] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
   const readinessScore = (() => {
     let score = 0;
     if (data.educationLevel) score += 20;
@@ -162,6 +168,9 @@ function FinalDashboard({ data, avatar, onRestart }) {
     if (data.intakeYear) score += 15;
     return Math.min(score, 100);
   })();
+
+  const readinessLabel = readinessScore >= 75 ? 'Strong Profile' : readinessScore >= 50 ? 'Developing' : 'Early Stage';
+  const readinessColor = readinessScore >= 75 ? '#10b981' : readinessScore >= 50 ? '#f59e0b' : '#ef4444';
 
   const radarData = [
     { subject: 'Academics', A: data.gpa ? 80 : 40 },
@@ -187,58 +196,58 @@ function FinalDashboard({ data, avatar, onRestart }) {
   };
   const accent = avatar ? (accents[avatar.id] || 'from-emerald-400 to-teal-500') : 'from-emerald-400 to-teal-500';
 
-  // Stat pills for quick-glance metrics
   const stats = [
-    { label: 'Target Course',   value: data.courseInterest || '—',        color: 'bg-sky-500/10 text-sky-600 dark:text-sky-400' },
-    { label: 'Intake',          value: data.intakeMonth && data.intakeYear ? `${data.intakeMonth} ${data.intakeYear}` : '—', color: 'bg-violet-500/10 text-violet-600 dark:text-violet-400' },
-    { label: 'Test Status',     value: data.testStatus || '—',            color: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
-    { label: 'Budget',          value: data.budget || '—',                color: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
-    { label: 'Career Goal',     value: data.careerGoal || '—',            color: 'bg-rose-500/10 text-rose-600 dark:text-rose-400' },
-    { label: 'Contact Via',     value: data.contactMethod || '—',         color: 'bg-teal-500/10 text-teal-600 dark:text-teal-400' },
+    { label: 'Target Course', value: data.courseInterest || '—',   icon: BookOpen,     colorCls: { bg: 'bg-sky-500/10',     border: 'border-sky-500/30',     text: 'text-sky-600 dark:text-sky-400'           }},
+    { label: 'Intake',        value: data.intakeMonth && data.intakeYear ? `${data.intakeMonth} ${data.intakeYear}` : '—', icon: Globe, colorCls: { bg: 'bg-violet-500/10', border: 'border-violet-500/30', text: 'text-violet-600 dark:text-violet-400'   }},
+    { label: 'Test Status',   value: data.testStatus || '—',        icon: CheckCircle2, colorCls: { bg: 'bg-amber-500/10',   border: 'border-amber-500/30',   text: 'text-amber-600 dark:text-amber-400'       }},
+    { label: 'Annual Budget', value: data.budget || '—',            icon: DollarSign,   colorCls: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-600 dark:text-emerald-400'   }},
+    { label: 'Career Goal',   value: data.careerGoal || '—',        icon: BarChart2,    colorCls: { bg: 'bg-rose-500/10',    border: 'border-rose-500/30',    text: 'text-rose-600 dark:text-rose-400'         }},
+    { label: 'Contact Via',   value: data.contactMethod || '—',     icon: MessageSquare,colorCls: { bg: 'bg-teal-500/10',    border: 'border-teal-500/30',    text: 'text-teal-600 dark:text-teal-400'         }},
   ];
 
   return (
+    <>
     <motion.div
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.55 }}
-      className="w-full space-y-5"
+      className="w-full space-y-6"
     >
       {/* ── Hero banner ── */}
-      <Card className="relative overflow-hidden border-border/40 bg-card/90 backdrop-blur-sm shadow-xl">
+      <Card className="relative overflow-hidden border-border/40 bg-card/90 backdrop-blur-sm shadow-2xl">
         <div className={`absolute inset-0 bg-linear-to-br ${accent} opacity-[0.07]`} />
-        {/* decorative arc */}
-        <div className={`absolute -right-16 -top-16 h-64 w-64 rounded-full bg-linear-to-br ${accent} opacity-20 blur-3xl`} />
-        <CardContent className="relative px-8 py-7">
-          <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
+        <div className={`absolute -right-20 -top-20 h-80 w-80 rounded-full bg-linear-to-br ${accent} opacity-20 blur-3xl`} />
+        <div className={`absolute -left-20 -bottom-20 h-64 w-64 rounded-full bg-linear-to-br ${accent} opacity-10 blur-3xl`} />
+        <CardContent className="relative px-10 py-10">
+          <div className="flex flex-col gap-8 sm:flex-row sm:items-center">
             {/* Avatar */}
             {avatar && (
-              <div className={`flex h-28 w-28 shrink-0 items-center justify-center rounded-3xl bg-linear-to-br ${accent} shadow-xl ring-4 ring-background`}>
-                <Image src={avatar.src} alt={avatar.name} width={108} height={108} className="h-full w-full object-contain drop-shadow-lg" />
+              <div className={`flex h-36 w-36 shrink-0 items-center justify-center rounded-3xl bg-linear-to-br ${accent} shadow-2xl ring-4 ring-background`}>
+                <Image src={avatar.src} alt={avatar.name} width={132} height={132} className="h-full w-full object-contain drop-shadow-lg" />
               </div>
             )}
 
             {/* Name + meta */}
             <div className="flex-1 min-w-0">
-              <p className="ivy-font text-sm font-medium uppercase tracking-widest text-muted-foreground">Student Profile</p>
-              <h2 className="ivy-font mt-0.5 text-4xl font-extrabold text-foreground leading-tight">{data.fullName || 'Your Name'}</h2>
-              <p className="ivy-font mt-1.5 text-base text-muted-foreground">
+              <p className="ivy-font text-xs font-black uppercase tracking-[0.25em] text-muted-foreground">Student Profile Summary</p>
+              <h2 className="ivy-font mt-1.5 text-5xl font-extrabold tracking-tight text-foreground leading-tight">{data.fullName || 'Your Name'}</h2>
+              <p className="ivy-font mt-2.5 text-lg font-medium text-muted-foreground">
                 {[data.educationLevel, data.fieldOfStudy, data.city].filter(Boolean).join('  ·  ')}
               </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-4 flex flex-wrap gap-2">
                 {(data.targetCountry || []).map((c) => (
-                  <span key={c} className="rounded-full bg-emerald-500/15 px-3.5 py-1 text-sm font-semibold text-emerald-600 dark:text-emerald-400 ivy-font">{c}</span>
+                  <span key={c} className="ivy-font rounded-full border border-emerald-500/40 bg-emerald-500/15 px-4 py-1.5 text-sm font-bold tracking-wide text-emerald-600 dark:text-emerald-400">{c}</span>
                 ))}
               </div>
             </div>
 
             {/* Readiness ring */}
-            <div className="flex shrink-0 flex-col items-center gap-2">
-              <div className="relative flex h-32 w-32 items-center justify-center">
+            <div className="flex shrink-0 flex-col items-center gap-3">
+              <div className="relative flex h-40 w-40 items-center justify-center">
                 <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 120 120">
-                  <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" strokeWidth="10" className="text-muted/30" />
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" strokeWidth="9" className="text-muted/30" />
                   <motion.circle
-                    cx="60" cy="60" r="52" fill="none" stroke="#10b981" strokeWidth="10"
+                    cx="60" cy="60" r="52" fill="none" stroke={readinessColor} strokeWidth="9"
                     strokeLinecap="round"
                     strokeDasharray={`${2 * Math.PI * 52}`}
                     initial={{ strokeDashoffset: 2 * Math.PI * 52 }}
@@ -247,99 +256,102 @@ function FinalDashboard({ data, avatar, onRestart }) {
                   />
                 </svg>
                 <div className="text-center">
-                  <span className="ivy-font text-4xl font-extrabold text-foreground">{readinessScore}</span>
-                  <span className="ivy-font block text-xs text-muted-foreground">/ 100</span>
+                  <span className="ivy-font text-5xl font-black text-foreground">{readinessScore}</span>
+                  <span className="ivy-font block text-sm font-bold text-muted-foreground">/ 100</span>
                 </div>
               </div>
-              <span className="ivy-font text-sm font-medium text-muted-foreground">Readiness Score</span>
+              <div className="text-center">
+                <span className="ivy-font block text-sm font-bold uppercase tracking-widest text-muted-foreground">Readiness Score</span>
+                <span className="ivy-font mt-0.5 block text-base font-extrabold" style={{ color: readinessColor }}>{readinessLabel}</span>
+              </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
       {/* ── Quick-stat pills ── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {stats.map(({ label, value, color }) => (
-          <div key={label} className={`rounded-2xl border border-border/40 bg-card/80 px-4 py-3 backdrop-blur-sm ${color.includes('bg') ? '' : ''}`}>
-            <p className="ivy-font text-xs text-muted-foreground">{label}</p>
-            <p className={`ivy-font mt-1 text-sm font-bold leading-snug ${color.split(' ').slice(1).join(' ')}`}>{value}</p>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        {stats.map(({ label, value, icon: Icon, colorCls }) => (
+          <div key={label} className={`rounded-2xl border ${colorCls.border} ${colorCls.bg} px-5 py-4 backdrop-blur-sm`}>
+            <div className={`mb-2 flex items-center gap-1.5 ${colorCls.text}`}>
+              <Icon className="h-3.5 w-3.5 shrink-0" />
+              <p className="ivy-font text-xs font-black uppercase tracking-widest">{label}</p>
+            </div>
+            <p className={`ivy-font text-base font-extrabold leading-snug ${colorCls.text}`}>{value}</p>
           </div>
         ))}
       </div>
 
       {/* ── Charts row ── */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {/* Radar – Profile Strength */}
+      {mounted && <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <Card className="border-border/40 bg-card/80 backdrop-blur-sm shadow-sm">
-          <CardHeader className="pb-1 pt-5 px-6">
-            <CardTitle className="ivy-font text-lg font-bold text-foreground">Profile Strength</CardTitle>
-            <p className="ivy-font text-xs text-muted-foreground mt-0.5">Across 5 key dimensions</p>
+          <CardHeader className="pb-2 pt-6 px-7">
+            <CardTitle className="ivy-font text-xl font-extrabold tracking-tight text-foreground">Profile Strength</CardTitle>
+            <p className="ivy-font mt-0.5 text-xs font-black uppercase tracking-widest text-muted-foreground">Across 5 key dimensions</p>
           </CardHeader>
-          <CardContent className="px-2 pb-4">
-            <ResponsiveContainer width="100%" height={240}>
-              <RadarChart data={radarData} outerRadius={85}>
+          <CardContent className="px-2 pb-5">
+            <ResponsiveContainer width="100%" height={300}>
+              <RadarChart data={radarData} outerRadius={105}>
                 <PolarGrid stroke="var(--border)" />
-                <PolarAngleAxis dataKey="subject" tick={{ fontSize: 12, fontFamily: 'inherit', fill: 'var(--muted-foreground)', fontWeight: 500 }} />
+                <PolarAngleAxis dataKey="subject" tick={{ fontSize: 13, fontFamily: 'inherit', fill: 'var(--muted-foreground)', fontWeight: 700 }} />
                 <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar dataKey="A" stroke="#10b981" fill="#10b981" fillOpacity={0.35} strokeWidth={2} />
+                <Radar dataKey="A" stroke="#10b981" fill="#10b981" fillOpacity={0.35} strokeWidth={2.5} />
               </RadarChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        {/* Pie – Target Countries */}
         <Card className="border-border/40 bg-card/80 backdrop-blur-sm shadow-sm">
-          <CardHeader className="pb-1 pt-5 px-6">
-            <CardTitle className="ivy-font text-lg font-bold text-foreground">Target Countries</CardTitle>
-            <p className="ivy-font text-xs text-muted-foreground mt-0.5">Your preferred study destinations</p>
+          <CardHeader className="pb-2 pt-6 px-7">
+            <CardTitle className="ivy-font text-xl font-extrabold tracking-tight text-foreground">Target Countries</CardTitle>
+            <p className="ivy-font mt-0.5 text-xs font-black uppercase tracking-widest text-muted-foreground">Preferred study destinations</p>
           </CardHeader>
-          <CardContent className="px-2 pb-4">
-            <ResponsiveContainer width="100%" height={240}>
+          <CardContent className="px-2 pb-5">
+            <ResponsiveContainer width="100%" height={300}>
               <PieChart>
                 <Pie
                   data={countryData} cx="50%" cy="45%"
-                  outerRadius={85} innerRadius={40}
+                  outerRadius={100} innerRadius={52}
                   dataKey="value"
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                   labelLine={false}
                 >
                   {countryData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
-                <Legend iconType="circle" iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+                <Legend iconType="circle" iconSize={11} wrapperStyle={{ fontSize: 13, fontWeight: 700 }} />
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        {/* Bar – Budget split */}
         <Card className="border-border/40 bg-card/80 backdrop-blur-sm shadow-sm">
-          <CardHeader className="pb-1 pt-5 px-6">
-            <CardTitle className="ivy-font text-lg font-bold text-foreground">Budget Breakdown</CardTitle>
-            <p className="ivy-font text-xs text-muted-foreground mt-0.5">Estimated allocation (%)</p>
+          <CardHeader className="pb-2 pt-6 px-7">
+            <CardTitle className="ivy-font text-xl font-extrabold tracking-tight text-foreground">Budget Breakdown</CardTitle>
+            <p className="ivy-font mt-0.5 text-xs font-black uppercase tracking-widest text-muted-foreground">Estimated allocation (%)</p>
           </CardHeader>
-          <CardContent className="px-2 pb-4">
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={budgetBar} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 12, fontFamily: 'inherit', fill: 'var(--muted-foreground)' }} />
+          <CardContent className="px-3 pb-5">
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={budgetBar} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                <XAxis dataKey="name" tick={{ fontSize: 13, fontFamily: 'inherit', fill: 'var(--muted-foreground)', fontWeight: 700 }} />
                 <YAxis tick={{ fontSize: 12, fontFamily: 'inherit', fill: 'var(--muted-foreground)' }} />
                 <Tooltip
                   cursor={{ fill: 'var(--muted)', opacity: 0.3 }}
-                  contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 13 }}
+                  contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 14, fontWeight: 700 }}
                   formatter={(v) => [`${v}%`, 'Share']}
                 />
-                <Bar dataKey="pct" fill="#10b981" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="pct" fill="#10b981" radius={[10, 10, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
       {/* ── Detail info cards ── */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
         {[
           {
             title: 'Academic Background',
-            color: 'text-sky-500',
+            iconColor: 'text-sky-500', topBorder: 'border-t-2 border-t-sky-500',
             icon: GraduationCap,
             items: [
               ['Education Level', data.educationLevel],
@@ -351,26 +363,26 @@ function FinalDashboard({ data, avatar, onRestart }) {
           },
           {
             title: 'Test & Application',
-            color: 'text-amber-500',
+            iconColor: 'text-amber-500', topBorder: 'border-t-2 border-t-amber-500',
             icon: BookOpen,
             items: [
-              ['Language Test',   data.testStatus],
-              ['Score',           data.testScore || (data.testStatus === 'Taken' ? 'Not entered' : '—')],
-              ['Apply Timeline',  data.applicationTimeline],
+              ['Language Test',  data.testStatus],
+              ['Score',          data.testScore || (data.testStatus === 'Taken' ? 'Not entered' : '—')],
+              ['Apply Timeline', data.applicationTimeline],
             ],
           },
           {
             title: 'Financial Plan',
-            color: 'text-emerald-500',
+            iconColor: 'text-emerald-500', topBorder: 'border-t-2 border-t-emerald-500',
             icon: DollarSign,
             items: [
-              ['Annual Budget',   data.budget],
-              ['Scholarship',     data.scholarshipInterest],
+              ['Annual Budget', data.budget],
+              ['Scholarship',   data.scholarshipInterest],
             ],
           },
           {
             title: 'Preferences',
-            color: 'text-violet-500',
+            iconColor: 'text-violet-500', topBorder: 'border-t-2 border-t-violet-500',
             icon: MessageSquare,
             items: [
               ['Study Environment', data.studyEnv],
@@ -379,7 +391,7 @@ function FinalDashboard({ data, avatar, onRestart }) {
           },
           {
             title: 'Contact Details',
-            color: 'text-rose-500',
+            iconColor: 'text-rose-500', topBorder: 'border-t-2 border-t-rose-500',
             icon: User,
             items: [
               ['Full Name',         data.fullName],
@@ -391,7 +403,7 @@ function FinalDashboard({ data, avatar, onRestart }) {
           },
           {
             title: 'Study Goals',
-            color: 'text-teal-500',
+            iconColor: 'text-teal-500', topBorder: 'border-t-2 border-t-teal-500',
             icon: Globe,
             items: [
               ['Countries',   (data.targetCountry || []).join(', ') || '—'],
@@ -400,19 +412,19 @@ function FinalDashboard({ data, avatar, onRestart }) {
               ['Career Goal', data.careerGoal],
             ],
           },
-        ].map(({ title, color, icon: Icon, items }) => (
-          <Card key={title} className="border-border/40 bg-card/80 backdrop-blur-sm shadow-sm">
-            <CardHeader className="pb-2 pt-5 px-6">
-              <CardTitle className="ivy-font flex items-center gap-2 text-base font-bold text-foreground">
-                <Icon className={`h-5 w-5 ${color}`} />
+        ].map(({ title, iconColor, topBorder, icon: Icon, items }) => (
+          <Card key={title} className={`border-border/40 ${topBorder} bg-card/80 backdrop-blur-sm shadow-sm`}>
+            <CardHeader className="pb-3 pt-7 px-7">
+              <CardTitle className="ivy-font flex items-center gap-3 text-xl font-extrabold tracking-tight text-foreground">
+                <Icon className={`h-6 w-6 shrink-0 ${iconColor}`} />
                 {title}
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-6 pb-5 space-y-3">
+            <CardContent className="space-y-4 px-7 pb-7">
               {items.map(([k, v]) => v ? (
-                <div key={k} className="flex items-start justify-between gap-3 border-b border-border/30 pb-2 last:border-0 last:pb-0">
-                  <span className="ivy-font text-sm text-muted-foreground whitespace-nowrap">{k}</span>
-                  <span className="ivy-font text-sm font-semibold text-foreground text-right">{v}</span>
+                <div key={k} className="flex items-start justify-between gap-4 border-b border-border/30 pb-3.5 last:border-0 last:pb-0">
+                  <span className="ivy-font text-xs font-black uppercase tracking-widest text-muted-foreground whitespace-nowrap">{k}</span>
+                  <span className="ivy-font text-sm font-extrabold text-foreground text-right">{v}</span>
                 </div>
               ) : null)}
             </CardContent>
@@ -421,16 +433,25 @@ function FinalDashboard({ data, avatar, onRestart }) {
       </div>
 
       {/* ── Actions ── */}
-      <div className="flex flex-col items-center gap-3 pt-2 sm:flex-row sm:justify-center">
-        <Button variant="outline" size="lg" className="ivy-font w-full sm:w-auto" onClick={onRestart}>
-          <ChevronLeft className="mr-2 h-4 w-4" /> Edit Responses
+      <div className="flex flex-col items-center gap-4 pb-8 pt-4 sm:flex-row sm:justify-center">
+        <Button variant="outline" size="lg" className="ivy-font h-14 w-full px-8 text-base font-bold sm:w-auto" onClick={onRestart}>
+          <ChevronLeft className="mr-2 h-5 w-5" /> Edit Responses
         </Button>
-        <Button size="lg" className="ivy-font w-full sm:w-auto bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/30"
-          onClick={() => { window.location.href = '/dashboard'; }}>
-          <Sparkles className="mr-2 h-4 w-4" /> Go to Dashboard
+        <Button size="lg" className="ivy-font h-14 w-full px-10 text-base font-bold bg-emerald-500 hover:bg-emerald-600 text-white shadow-xl shadow-emerald-500/30 sm:w-auto"
+          onClick={() => setShowAIDashboard(true)}>
+          <Sparkles className="mr-2 h-5 w-5" /> Go to Dashboard
         </Button>
       </div>
     </motion.div>
+
+    {showAIDashboard && (
+      <AICounsellingDashboard
+        avatar={avatar}
+        data={data}
+        onClose={() => setShowAIDashboard(false)}
+      />
+    )}
+    </>
   );
 }
 

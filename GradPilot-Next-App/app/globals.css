@@ -127,6 +127,16 @@
   }
   body {
     @apply bg-background text-foreground;
+    scrollbar-width: none;
+  }
+  body::-webkit-scrollbar {
+    display: none;
+  }
+  html {
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar {
+    display: none;
   }
   
   /* Apply Ivy Presto font to headings and main text */
@@ -142,6 +152,15 @@
 /* Utility class for Ivy font */
 .ivy-font {
   font-family: 'Ivy Presto', var(--font-geist-sans), sans-serif;
+}
+
+/* Utility: hide scrollbar while preserving scroll functionality */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 /* Exclude StaggeredMenu items from custom font */
@@ -307,6 +326,40 @@
   background: rgba(15, 23, 42, 0.9) !important;
   border: 1px solid rgba(71, 85, 105, 0.5) !important;
   border-radius: 8px !important;
+}
+
+/* ─── Scroll & Paint Performance ──────────────────────────── */
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Passive-friendly touch scroll on overflow containers */
+.overflow-y-auto,
+.overflow-y-scroll,
+.overflow-x-auto,
+.overflow-x-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Reduced motion: disable all CSS transitions/animations */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-float,
+  .animate-float-delayed,
+  .animate-fade-in,
+  .animate-slide-up,
+  .animate-message-slide {
+    animation: none !important;
+  }
 }
 
 .react-flow__controls-button {

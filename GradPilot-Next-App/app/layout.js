@@ -3,7 +3,7 @@ import "./globals.css";
 import BackgroundWrapper from "@/components/BackgroundWrapper";
 import AuthProvider from "@/components/AuthProvider";
 import ToastProvider from "@/components/ToastProvider";
-import ThemeInitializer from "@/components/ThemeInitializer";
+import { ThemeProvider } from "next-themes";
 
 const inter = Inter({
   variable: "--font-geist-sans",
@@ -32,13 +32,14 @@ export default function RootLayout({ children }) {
         <meta name="theme-color" content="#0f172a" />
       </head>
       <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}>
-        <ThemeInitializer />
-        <AuthProvider>
-          <ToastProvider />
-          <BackgroundWrapper>
-            {children}
-          </BackgroundWrapper>
-        </AuthProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <AuthProvider>
+            <ToastProvider />
+            <BackgroundWrapper>
+              {children}
+            </BackgroundWrapper>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
