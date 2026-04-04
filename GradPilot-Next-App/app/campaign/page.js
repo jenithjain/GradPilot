@@ -10,7 +10,10 @@ import {
   Coffee,
   Smartphone,
   Shirt,
-  Lightbulb
+  Lightbulb,
+  FolderOpen,
+  Clock,
+  ChevronRight
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -174,6 +177,29 @@ function CampaignPageContent() {
 
   const { isGeneratingStrategy, isGeneratingWorkflow } = useCampaignStore();
   const isLoading = isGeneratingStrategy || isGeneratingWorkflow;
+
+  // Saved workflows state
+  const [savedWorkflows, setSavedWorkflows] = useState([]);
+  const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/workflows/list');
+        const json = await res.json();
+        if (json.success) setSavedWorkflows(json.workflows || []);
+      } catch {}
+      setIsLoadingWorkflows(false);
+    })();
+  }, []);
+
+  const handleLoadWorkflow = (wf) => {
+    if (wf.brief) setStoreBrief(wf.brief);
+    if (wf.strategyRationale) setStrategy({ rationale: wf.strategyRationale });
+    setWorkflow(wf.nodes || [], wf.edges || []);
+    toast.success('Workflow loaded');
+    router.push('/campaign/canvas');
+  };
 
   // Import workflow JSON (drag/drop or file input)
   const handleImportFile = (file) => {
@@ -360,9 +386,9 @@ function CampaignPageContent() {
             </div>
 
             <div className="space-y-4">
-              {quickExamples.map((example, index) => (
+              {quickExamples.map((example) => (
                 <motion.button
-                  key={index}
+                  key={example.title}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.3 + index * 0.1 }}
@@ -417,6 +443,64 @@ function CampaignPageContent() {
                   <span>Interactive canvas to review and refine each element</span>
                 </li>
               </ul>
+            </motion.div>
+
+            {/* Saved Workflows */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.7 }}
+              className="mt-6 p-6 rounded-xl border border-border bg-card"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-500/10">
+                    <FolderOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-foreground">Saved Workflows</h3>
+                </div>
+                {savedWorkflows.length > 0 && (
+                  <span className="text-xs text-muted-foreground">{savedWorkflows.length} saved</span>
+                )}
+              </div>
+
+              {isLoadingWorkflows ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : savedWorkflows.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">
+                  No saved workflows yet. Generate a campaign and save it from the canvas.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                  {savedWorkflows.map((wf, i) => (
+                    <button
+                      key={wf._id ? String(wf._id) : `wf-${i}`}
+                      onClick={() => handleLoadWorkflow(wf)}
+                      className="w-full p-3 rounded-lg border border-border bg-muted/20 hover:bg-accent hover:border-emerald-500/30 transition-all duration-200 text-left group"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                            {wf.brief || 'Untitled Workflow'}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Clock className="w-3 h-3 text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(wf.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              · {wf.nodes?.length || 0} nodes
+                            </span>
+                          </div>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-emerald-500 transition-colors mt-0.5 shrink-0" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </motion.div>
           </motion.div>
         </div>

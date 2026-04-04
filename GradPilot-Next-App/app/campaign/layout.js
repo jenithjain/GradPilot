@@ -44,9 +44,8 @@ export default function CampaignLayout({ children }) {
                 { label: "Home", link: "/", ariaLabel: "Go to Home" },
                 { label: "Dashboard", link: "/dashboard", ariaLabel: "View Dashboard" },
                 { label: "Campaign AI", link: "/campaign", ariaLabel: "AI Campaign Generator" },
-                { label: "Features", link: "/#features", ariaLabel: "View Features" },
-                { label: "Pricing", link: "/#pricing", ariaLabel: "View Pricing" },
-                { label: "Contact", link: "/#contact", ariaLabel: "Contact us" },
+                { label: "Audit Log", link: "/audit", ariaLabel: "View Audit Log" },
+                { label: "Profile", link: "/profile", ariaLabel: "View Profile" },
                 { label: "Login", link: "/login", ariaLabel: "Login to your account" },
               ]}
               socialItems={[

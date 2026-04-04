@@ -8,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import Footer from "@/components/Footer";
+import { useCampaignStore } from "@/lib/store";
+import { toast } from "react-hot-toast";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart,
@@ -18,7 +19,8 @@ import {
 import {
   ArrowUpRight, ArrowDownRight, DollarSign, TrendingUp,
   CreditCard, Activity, Users, ShoppingCart, Wallet, Target,
-  PiggyBank, TrendingDown, Sparkles, Rocket
+  PiggyBank, TrendingDown, Sparkles, Rocket,
+  FolderOpen, Clock, Trash2, ExternalLink, Workflow
 } from "lucide-react";
 
 const CHART_COLORS = {
@@ -70,6 +72,48 @@ export default function Dashboard() {
   const [preparedHeader, setPreparedHeader] = useState([]);
   const [preparedRows, setPreparedRows] = useState([]);
   const [detectionResult, setDetectionResult] = useState(null);
+
+  // Saved workflows
+  const [savedWorkflows, setSavedWorkflows] = useState([]);
+  const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
+  const { setBrief: setStoreBrief, setStrategy, setWorkflow } = useCampaignStore();
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/workflows/list');
+        const json = await res.json();
+        if (json.success) setSavedWorkflows(json.workflows || []);
+      } catch {}
+      setIsLoadingWorkflows(false);
+    })();
+  }, []);
+
+  const handleLoadWorkflow = (wf) => {
+    if (wf.brief) setStoreBrief(wf.brief);
+    if (wf.strategyRationale) setStrategy({ rationale: wf.strategyRationale });
+    setWorkflow(wf.nodes || [], wf.edges || []);
+    toast.success('Workflow loaded');
+    router.push('/campaign/canvas');
+  };
+
+  const handleDeleteWorkflow = async (id) => {
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/workflows/${id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        setSavedWorkflows(prev => prev.filter(w => String(w.id || w._id) !== String(id)));
+        toast.success('Workflow deleted');
+      } else {
+        toast.error(json.error || 'Failed to delete');
+      }
+    } catch {
+      toast.error('Failed to delete workflow');
+    }
+    setDeletingId(null);
+  };
 
   /**
    * Detects sales column using the same 3-tier priority logic as backend
@@ -781,10 +825,102 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-      </div>
 
-      {/* Footer */}
-      <Footer />
+        {/* ── Saved Campaign Workflows ─────────────────────────────── */}
+        <Card className="border-border/40 backdrop-blur-sm bg-card/50">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <div className="flex items-center gap-2">
+              <Workflow className="w-5 h-5 text-emerald-500" />
+              <CardTitle className="text-lg font-semibold ivy-font">
+                Saved Campaign Workflows
+              </CardTitle>
+              {savedWorkflows.length > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">{savedWorkflows.length}</Badge>
+              )}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push('/campaign')}
+              className="text-xs gap-1"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              New Workflow
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {isLoadingWorkflows ? (
+              <div className="text-center py-8 text-sm text-muted-foreground">
+                Loading workflows…
+              </div>
+            ) : savedWorkflows.length === 0 ? (
+              <div className="text-center py-10 text-muted-foreground">
+                <Workflow className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm font-medium">No saved workflows yet</p>
+                <p className="text-xs mt-1 opacity-70">Create a campaign workflow and save it to see it here.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-4 gap-1.5"
+                  onClick={() => router.push('/campaign')}
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  Create Workflow
+                </Button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {savedWorkflows.map((wf, i) => (
+                  <div
+                    key={wf.id ? String(wf.id) : wf._id ? String(wf._id) : `wf-${i}`}
+                    className="rounded-xl border border-border/60 p-4 flex flex-col gap-3 transition-shadow hover:shadow-md hover:border-emerald-500/50 bg-muted/30"
+                  >
+                    {/* Brief */}
+                    <p className="text-sm font-medium leading-snug line-clamp-3 flex-1 text-foreground">
+                      {wf.brief || "Untitled workflow"}
+                    </p>
+
+                    {/* Meta row */}
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {wf.createdAt
+                          ? new Date(wf.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+                          : "—"}
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500">
+                        {wf.nodesCount ?? wf.nodes?.length ?? 0} nodes
+                      </span>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        className="flex-1 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8"
+                        onClick={() => handleLoadWorkflow(wf)}
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Open in Canvas
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 w-8 p-0 flex items-center justify-center border-red-500/40 text-red-500 hover:bg-red-500/10"
+                        disabled={deletingId === String(wf.id || wf._id)}
+                        onClick={() => handleDeleteWorkflow(String(wf.id || wf._id))}
+                        title="Delete workflow"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
