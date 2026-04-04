@@ -450,27 +450,25 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen w-full">
       <div className="container mx-auto p-6 space-y-8 max-w-7xl">
-        {/* Header */}
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-4xl font-bold text-foreground ivy-font mb-2">
-              Student Counselling & Lead Dashboard
-            </h1>
-            <p className="text-muted-foreground ivy-font">
-              AI-powered student lead qualification and counselling analytics
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant="outline" className="px-3 py-1 ivy-font">
-              November 2025
-            </Badge>
-            <Button className="bg-emerald-500 hover:bg-emerald-600 text-white ivy-font">
-              <Target className="h-4 w-4 mr-2" />
-              Launch Follow-up
+        <Card className="border-border/40 backdrop-blur-sm bg-card/50">
+          <CardHeader>
+            <CardTitle className="ivy-font">Start your journey with GradPilot</CardTitle>
+            <CardDescription className="ivy-font">
+              Begin by choosing your avatar, then select how you want to fill your details.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <Button
+              className="bg-emerald-500 hover:bg-emerald-600 text-white ivy-font"
+              onClick={() => router.push('/onboarding')}
+            >
+              Start your journey with GradPilot
             </Button>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
+        {false && (
+        <>
         {/* Dynamic Upload & Analyze Section */}
         <Card className="border-border/40 backdrop-blur-sm bg-card/50">
           <CardHeader>
@@ -920,6 +918,8 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
+        </>
+        )}
       </div>
     </div>
   );
