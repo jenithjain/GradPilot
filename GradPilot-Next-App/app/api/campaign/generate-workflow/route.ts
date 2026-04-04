@@ -36,7 +36,7 @@ CRITICAL REQUIREMENTS:
      "position": { "x": number, "y": number },
      "data": {
        "label": "Agent Name",
-       "type": "strategy" | "copy" | "image" | "research" | "exa_research" | "timeline" | "distribution" | "email" | "linkedin" | "twitter",
+       "type": "strategy" | "copy" | "image" | "video" | "research" | "exa_research" | "timeline" | "distribution" | "email" | "linkedin" | "twitter",
        "status": "idle",
        "content": null,
        "promptContext": "Detailed instruction for this specific agent task"
@@ -67,6 +67,7 @@ CRITICAL REQUIREMENTS:
    - "strategy": Student Segment Analyzer (research target student demographics, lead qualification criteria, intake timing)
    - "copy": Outreach Copy Generator (multi-platform content: headlines, primary texts, CTAs for student recruitment)
    - "image": Visual Asset Generator (create education-themed image prompts: campus life, graduation, diversity, study abroad lifestyle)
+   - "video": Cinematic Video Agent (generate cinematic video concepts and visual prompts for short video clips showcasing campus life, student testimonials, study abroad atmosphere using Google Veo AI — each scene is 4-8 seconds)
    - "research": Education Market Researcher (find trending courses, university rankings, scholarship opportunities, competitor analysis)
    - "exa_research": Web Research Agent (POWERFUL — uses neural search to crawl the live web for student leads, market intelligence, competitor research, student communities, and generates a structured CSV-ready lead list with relevance scores. ALWAYS include this node when the campaign involves lead generation, market research, or competitor analysis. This agent searches the REAL web and returns exportable data.)
    - "timeline": Campaign Timeline Optimizer (align with university intake cycles — UK/Ireland Sep and Jan intakes, IELTS exam dates)
@@ -83,6 +84,7 @@ CRITICAL REQUIREMENTS:
 SPECIAL INSTRUCTIONS PER NODE TYPE:
 - For type "copy": set data.promptContext to request platform-ready student outreach content (3 headlines, 3 primary texts, CTAs like "Book Free Counselling", "Check Your Eligibility") tailored to the student segment and campaign strategy.
 - For type "image": set data.promptContext to request 2-4 education-themed visuals with clear art direction; subjects like diverse student groups, campus life, graduation, travel/exploration, counselling sessions.
+- For type "video": set data.promptContext to request 2-4 cinematic video scene concepts for the campaign. Each scene should describe camera movement, lighting, subjects, and mood. Topics: campus tours, student life montages, graduation ceremonies, counselling sessions, city exploration. These prompts will be used to generate short video clips (4-8s each) using Google Veo AI.
 - For type "exa_research": set data.promptContext to describe WHAT to search for on the web — e.g. "Search for prospective Indian students interested in UK universities, find student communities, competitor consultancies, trending courses, and generate a lead list with contact sources." This node uses neural web search to crawl the real web and produce structured market intelligence + exportable CSV lead lists. Place it early in the workflow (before strategy/copy nodes) so its output feeds into downstream content generation.
 - For type "email": set data.promptContext to generate professional student outreach emails with compelling subject lines, HTML content, and personalization. Tone should be encouraging and mentor-like. The user will upload a CSV file with recipient emails. This node will automatically send bulk emails to all recipients.
 - For type "linkedin": set data.promptContext to generate engaging LinkedIn posts about study abroad guidance, student success stories, university spotlights, or career transformation through overseas education. This node will automatically post to the user's connected LinkedIn account.
@@ -95,7 +97,7 @@ Brief: ${brief}
 
 Strategy: ${rationale}
 
-Generate a comprehensive workflow graph with as many specialized agent nodes as needed (typically 5-8 nodes) to create a complete student outreach campaign. Connect them with semantic edges. Ensure the workflow represents a logical campaign execution pipeline that covers: web research (exa_research) → student research → strategy → creative production → social media posting/email outreach → distribution → lead nurturing. ALWAYS include an exa_research node as one of the first nodes for web-based lead generation and market intelligence. Include email nodes when the campaign involves direct outreach to students or sending scholarship/admission updates.
+Generate a comprehensive workflow graph with as many specialized agent nodes as needed (typically 5-8 nodes) to create a complete student outreach campaign. Connect them with semantic edges. Ensure the workflow represents a logical campaign execution pipeline that covers: web research (exa_research) → student research → strategy → creative production (image + video) → social media posting/email outreach → distribution → lead nurturing. ALWAYS include an exa_research node as one of the first nodes for web-based lead generation and market intelligence. Include email nodes when the campaign involves direct outreach to students or sending scholarship/admission updates. Include a video node when the campaign would benefit from cinematic visual content (campus tours, student testimonials, study abroad lifestyle clips).
 
 Respond with ONLY the JSON object:`;
 

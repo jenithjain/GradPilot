@@ -228,9 +228,14 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
         console.log(`[${context.nodeType}] Post response:`, postData);
         
         if (!postRes.ok || !postData.success) {
+          const is503 = postData.details?.status === 503 || postRes.status === 503;
+          const errorMsg = is503 
+            ? `⚠️ X/Twitter API is experiencing server issues (503 Service Unavailable). This is a known platform-wide issue. Your content was generated and is ready — you can copy and post it manually.`
+            : `⚠️ Failed to post: ${postData.error || 'Unknown error'}. ${JSON.stringify(postData.details || {})}`;
+          
           response = NextResponse.json({ 
             success: true, 
-            output: `Content generated:\n\n${postText}\n\n⚠️ Failed to post: ${postData.error || 'Unknown error'}. Details: ${JSON.stringify(postData.details || {})}`,
+            output: `📝 Generated ${context.nodeType === 'twitter' ? 'Tweet' : 'LinkedIn Post'}:\n\n${postText}\n\n${errorMsg}`,
             nodeId 
           });
           return response;
@@ -545,6 +550,63 @@ Team Fateh Education`;
           output: `Email generation or sending failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
           nodeId 
         });
+        return response;
+      }
+    }
+
+    // Video node: generate visual prompts via Gemini, then trigger Veo video generation
+    if (context.nodeType === 'video') {
+      const textModel = getFlashModel();
+      try {
+        console.log('[execute-node] Starting video concept generation for node:', nodeId);
+        const generatedContent = await generateWithRetry(textModel, finalPrompt);
+
+        // Parse the visual prompts JSON
+        let videoData;
+        try {
+          let cleanedContent = generatedContent.trim();
+          cleanedContent = cleanedContent.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
+          const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            videoData = JSON.parse(jsonMatch[0]);
+          } else {
+            throw new Error('No JSON object found in response');
+          }
+        } catch (parseError) {
+          console.error('[video] JSON parsing failed, using raw output');
+          response = NextResponse.json({ success: true, output: generatedContent.trim(), nodeId });
+          return response;
+        }
+
+        const visualPrompts = videoData.visualPrompts || [];
+        console.log(`[video] Generated ${visualPrompts.length} visual prompts`);
+
+        // Build structured output with visual prompts ready for Veo generation
+        const payload = JSON.stringify({
+          visualPrompts,
+          projectName: videoData.projectName || 'Campaign Video',
+          concept: videoData.concept || '',
+          meta: {
+            type: 'video_concepts',
+            count: visualPrompts.length,
+            scenes: visualPrompts.map((p: any) => ({
+              sceneName: p.sceneName,
+              mood: p.mood,
+              duration: p.duration || 5,
+            })),
+          }
+        });
+
+        console.log('[execute-node] Video concept generation complete');
+        response = NextResponse.json({ success: true, output: payload, nodeId });
+        return response;
+      } catch (err) {
+        error = err as Error;
+        console.error('[video] Video concept generation failed:', error);
+        response = NextResponse.json({
+          success: false,
+          error: `Video concept generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        }, { status: 500 });
         return response;
       }
     }

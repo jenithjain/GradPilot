@@ -1,6 +1,6 @@
 // Campaign AI Workflow Types
 
-export type NodeType = 'strategy' | 'copy' | 'image' | 'research' | 'exa_research' | 'timeline' | 'distribution' | 'linkedin' | 'twitter' | 'email';
+export type NodeType = 'strategy' | 'copy' | 'image' | 'video' | 'research' | 'exa_research' | 'timeline' | 'distribution' | 'linkedin' | 'twitter' | 'email';
 
 export type NodeStatus = 'idle' | 'loading' | 'complete' | 'error';
 
@@ -17,6 +17,7 @@ export interface WorkflowNodeData {
   promptContext: string;
   output?: string;
   error?: string;
+  generatedVideos?: Record<string, string>;
 }
 
 export interface WorkflowNode {
