@@ -9,16 +9,221 @@ import { authOptions } from '@/lib/auth-options';
 import dbConnect from '@/lib/mongodb';
 import User from '@/lib/models/User';
 import { logAuditEvent } from '@/lib/audit-logger';
+import {
+  appendObservabilityLog,
+  ensureObservabilityFolders,
+  readLatestWebResearchSnapshot,
+  saveWebResearchSnapshot,
+} from '@/lib/agent-observability';
+
+type EmailRecipient = { email: string; name?: string };
+type CsvLeadRow = {
+  name?: string;
+  type?: string;
+  email?: string;
+  contactInfo?: string;
+};
+type EmailTemplate = { subject: string; html: string; text?: string };
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EXCLUDED_BROADCAST_TYPES = new Set(['community', 'competitor']);
+
+function normalizeEmail(email: string): string {
+  return String(email || '').trim().toLowerCase();
+}
+
+function isValidLeadEmail(email: string): boolean {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  if (!EMAIL_REGEX.test(normalized)) return false;
+  if (normalized.includes('(inferred)')) return false;
+  if (normalized.includes('see url')) return false;
+  return true;
+}
+
+function dedupeRecipients(recipients: EmailRecipient[]): EmailRecipient[] {
+  const seen = new Set<string>();
+  const unique: EmailRecipient[] = [];
+
+  for (const recipient of recipients) {
+    const normalizedEmail = normalizeEmail(recipient.email);
+    if (!isValidLeadEmail(normalizedEmail) || seen.has(normalizedEmail)) {
+      continue;
+    }
+
+    seen.add(normalizedEmail);
+    unique.push({
+      email: normalizedEmail,
+      name: recipient.name?.trim() || undefined,
+    });
+  }
+
+  return unique;
+}
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (const ch of line) {
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      values.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  values.push(current.trim());
+
+  return values;
+}
+
+function normalizeLeadType(type?: string): string {
+  return String(type || '').trim().toLowerCase();
+}
+
+function parseCsvLeadRows(output: string): CsvLeadRow[] {
+  if (!output) return [];
+
+  const csvMatch = output.match(/```csv\s*([\s\S]*?)```/i);
+  if (!csvMatch) return [];
+
+  const csvContent = csvMatch[1].trim();
+  const lines = csvContent.split('\n').filter(line => line.trim());
+  if (lines.length <= 1) return [];
+
+  const header = lines[0].toLowerCase();
+  const cols = header.split(',').map(col => col.replace(/"/g, '').trim());
+
+  const emailColIdx = cols.findIndex(col => col === 'email');
+  const contactColIdx = cols.findIndex(col => col === 'contact info');
+  const nameColIdx = cols.findIndex(col => col === 'name');
+  const typeColIdx = cols.findIndex(col => col === 'type');
+
+  if (emailColIdx === -1 && contactColIdx === -1) return [];
+
+  const rows: CsvLeadRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCsvLine(lines[i]);
+
+    let email = '';
+    if (emailColIdx !== -1) {
+      email = values[emailColIdx]?.replace(/"/g, '').trim() || '';
+    }
+    if (!email && contactColIdx !== -1) {
+      const contact = values[contactColIdx]?.replace(/"/g, '').trim() || '';
+      if (contact.includes('@')) {
+        email = contact;
+      }
+    }
+
+    const name = nameColIdx !== -1 ? values[nameColIdx]?.replace(/"/g, '').trim() : undefined;
+    const type = typeColIdx !== -1 ? values[typeColIdx]?.replace(/"/g, '').trim() : undefined;
+    const contactInfo = contactColIdx !== -1 ? values[contactColIdx]?.replace(/"/g, '').trim() : undefined;
+
+    rows.push({ name, type, email, contactInfo });
+  }
+
+  return rows;
+}
+
+function extractRecipientsFromCsvOutput(
+  output: string,
+  options: { studentOnly?: boolean; excludeTypes?: Set<string> } = {}
+): EmailRecipient[] {
+  const rows = parseCsvLeadRows(output);
+  const recipients: EmailRecipient[] = [];
+
+  for (const row of rows) {
+    const typeNormalized = normalizeLeadType(row.type);
+
+    if (options.studentOnly && typeNormalized && !typeNormalized.includes('student')) {
+      continue;
+    }
+    if (options.excludeTypes && options.excludeTypes.has(typeNormalized)) {
+      continue;
+    }
+
+    const bestEmail = row.email || row.contactInfo || '';
+    if (isValidLeadEmail(bestEmail)) {
+      recipients.push({ email: bestEmail, name: row.name || undefined });
+    }
+  }
+
+  return dedupeRecipients(recipients);
+}
+
+function extractRecipientsFromNodeMetadata(node: WorkflowNode, key: string = 'leadsWithEmail'): EmailRecipient[] {
+  const metadataLeads = (node.data as any)?.metadata?.[key];
+  if (!Array.isArray(metadataLeads)) return [];
+
+  const mapped = metadataLeads.map((lead: any) => ({
+    email: lead?.email,
+    name: lead?.name,
+  }));
+
+  return dedupeRecipients(mapped);
+}
+
+function normalizeEmailSequence(input: any): EmailTemplate[] {
+  const candidates: any[] = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.sequence)
+      ? input.sequence
+      : Array.isArray(input?.emails)
+        ? input.emails
+        : input
+          ? [input]
+          : [];
+
+  return candidates
+    .map((item) => {
+      const subject = String(item?.subject || '').trim();
+      const html = String(item?.html || '').trim();
+      const text = String(item?.text || '').trim();
+      if (!subject || !html) return null;
+      return {
+        subject,
+        html,
+        text: text || undefined,
+      } as EmailTemplate;
+    })
+    .filter(Boolean) as EmailTemplate[];
+}
 
 export async function POST(request: Request) {
   const startTime = Date.now();
   let session: any = null;
   let response: Response | null = null;
   let error: Error | null = null;
+  let requestPayload: any = null;
+  let executionSummary: Record<string, any> = {};
+  let runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  let workflowRunId = '';
 
   try {
+    await ensureObservabilityFolders();
     session = await getServerSession(authOptions as any);
-    const { nodeId, nodes, edges, brief, strategy } = await request.json();
+    requestPayload = await request.json();
+    const { nodeId, nodes, edges, brief, strategy } = requestPayload;
+    workflowRunId = String(requestPayload?.workflowRunId || `wf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    runId = `run_${String(nodeId || 'node')}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    executionSummary = {
+      runId,
+      workflowRunId,
+      nodeId,
+      nodeCount: Array.isArray(nodes) ? nodes.length : 0,
+      edgeCount: Array.isArray(edges) ? edges.length : 0,
+    };
+    console.log('[agent-run] start', executionSummary);
+    appendObservabilityLog('unified-executor', {
+      event: 'node_execution_started',
+      ...executionSummary,
+    });
 
     // Validate input
     if (!nodeId || !nodes || !edges || !brief || !strategy) {
@@ -52,8 +257,43 @@ export async function POST(request: Request) {
       kyc
     );
 
+    // If email node has no explicit incoming edge context, auto-attach completed node outputs
+    // so the email content can still use upstream strategy/research/copy information.
+    if (context.nodeType === 'email' && context.incomingEdges.length === 0) {
+      const fallbackContexts = (nodes as WorkflowNode[])
+        .filter(n => n.id !== nodeId && n.data?.status === 'complete' && !!n.data?.output)
+        .slice(0, 4)
+        .map(n => ({
+          sourceNodeId: n.id,
+          sourceOutput: String(n.data.output),
+          transferLogic: 'Auto-fallback context from completed upstream node output.',
+          edgeLabel: `Auto Context (${n.data?.label || n.id})`,
+        }));
+
+      if (fallbackContexts.length > 0) {
+        context.incomingEdges.push(...fallbackContexts);
+      }
+    }
+    executionSummary.nodeType = context.nodeType;
+
     // Compile the final prompt
     let finalPrompt = compilePrompt(context);
+    appendObservabilityLog('ai-sdk-executor', {
+      event: 'prompt_compiled',
+      runId,
+      workflowRunId,
+      nodeId,
+      nodeType: context.nodeType,
+      promptLength: finalPrompt.length,
+      incomingEdgeCount: context.incomingEdges.length,
+    });
+    appendObservabilityLog('ai-provider', {
+      event: 'model_execution_requested',
+      runId,
+      workflowRunId,
+      nodeId,
+      nodeType: context.nodeType,
+    });
 
     // Exa.ai Web Research node - searches web then analyzes with Gemini
     if (context.nodeType === 'exa_research') {
@@ -358,39 +598,57 @@ Return ONLY a JSON array of 6 query strings.`;
 
         const fullCSV = csvHeader + '\n' + csvRows.join('\n');
 
-        // Step 6: Generate Gemini analysis with the structured data
-        const analysisPrompt = `You are a Lead Generation Analyst for Fateh Education. Analyze the following research data and provide insights.
+        const sendableLeads = processedResults.filter((r: any) => {
+          const type = String(r.type || '').toLowerCase();
+          return !EXCLUDED_BROADCAST_TYPES.has(type);
+        });
+        const emailableStudentLeads = studentLeads.filter((r: any) => r.emails && r.emails.length > 0);
+        const emailableSendableLeads = sendableLeads.filter((r: any) => r.emails && r.emails.length > 0);
+        const topContactableLeads = sendableLeads
+          .filter((r: any) => (r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0))
+          .slice(0, 15);
 
-## RAW DATA SUMMARY
-- Total Results: ${processedResults.length}
-- Student Leads: ${studentLeads.length}
-- LinkedIn Profiles: ${linkedInProfiles.length}
-- Communities: ${communities.length}
-- Competitors: ${competitors.length}
-- Reddit Users: ${redditUsers.length}
+        const topContactsTable = topContactableLeads.length > 0
+          ? ['| Rank | Name | Type | Score | Email | Phone | Source |', '|---|---|---|---:|---|---|---|']
+              .concat(
+                topContactableLeads.map((r: any, index: number) => `| ${index + 1} | ${String(r.name).replace(/\|/g, ' ')} | ${r.type} | ${r.relevance} | ${r.emails?.[0] || '-'} | ${r.phones?.[0] || '-'} | [link](${r.sourceUrl}) |`)
+              )
+              .join('\n')
+          : 'No contactable leads found in this batch.';
 
-## TOP STUDENT LEADS (for email outreach)
-${studentLeads.slice(0, 10).map((r: any, i: number) => `${i+1}. ${r.name} (Score: ${r.relevance}) - ${r.contactInfo !== 'See URL' ? r.contactInfo : 'No direct contact'}`).join('\n')}
+        // Step 6: Generate Gemini analysis with stricter formatting and practical recommendations
+        const analysisPrompt = `You are a senior lead-generation strategist for Fateh Education. Return concise actionable markdown.
 
-## KEY INSIGHTS
-Provide 3-5 actionable insights based on this data for Fateh Education's student outreach campaign.
+DATA:
+- Total results: ${processedResults.length}
+- Student leads: ${studentLeads.length}
+- Sendable leads (excluding competitors/communities): ${sendableLeads.length}
+- Student leads with email: ${emailableStudentLeads.length}
+- Sendable leads with email: ${emailableSendableLeads.length}
 
-## RECOMMENDED ACTIONS
-List specific next steps for the marketing team.
+TOP CONTACTABLE LEADS:
+${topContactableLeads.slice(0, 10).map((r: any, i: number) => `${i + 1}. ${r.name} | ${r.type} | score ${r.relevance} | email ${r.emails?.[0] || '-'} | phone ${r.phones?.[0] || '-'}`).join('\n') || 'None'}
 
-Keep your response concise and actionable.`;
+OUTPUT RULES:
+1) Start with heading "### Strategic Analysis"
+2) Provide exactly 4 bullet insights
+3) Provide heading "### Priority Actions (Next 7 Days)"
+4) Provide exactly 5 numbered actions
+5) Keep practical, no fluff, no apology text.`;
 
         const textModel = getFlashModel();
         const analysis = await generateWithRetry(textModel, analysisPrompt);
 
         // Step 7: Build comprehensive output
         const traceList = allTraces.map((t: string) => `- ${t}`).join('\n');
-        const topLeadsList = studentLeads.filter((r: any) => r.contactInfo !== 'See URL').slice(0, 10).map((r: any, i: number) => 
-          `${i+1}. **${r.name}** (Score: ${r.relevance})\n   📧 ${r.contactInfo}\n   📝 ${r.notes}`
-        ).join('\n\n') || 'No student leads with direct contact found.';
-        const emailLeadsList = studentLeads.filter((r: any) => r.emails && r.emails.length > 0).map((r: any) => 
-          `- ${r.name}: ${r.emails[0]}`
-        ).join('\n') || 'No leads with verified emails found. Use LinkedIn outreach instead.';
+        const emailLeadsList = emailableSendableLeads.map((r: any) =>
+          `- ${r.name} (${r.type}): ${r.emails[0]} (score ${r.relevance})`
+        ).join('\n') || 'No sendable leads with verified emails found.';
+
+        const leadsWithEmailCount = emailableStudentLeads.length;
+        const sendableEmailCount = emailableSendableLeads.length;
+        const leadsWithPhoneCount = studentLeads.filter((r: any) => r.phones && r.phones.length > 0).length;
+        const highPriorityCount = sendableLeads.filter((r: any) => r.relevance >= 85).length;
 
         const output = `## 🔍 Lead Research Report
 
@@ -407,8 +665,15 @@ ${traceList}
 | Reddit Users | ${redditUsers.length} |
 | **Total** | **${processedResults.length}** |
 
-### 🔥 Top Student Leads (with contact info)
-${topLeadsList}
+### ✅ Data Quality Snapshot
+- Student leads with verified email: ${leadsWithEmailCount}
+- Sendable leads with verified email (excl. competitor/community): ${sendableEmailCount}
+- Student leads with phone numbers: ${leadsWithPhoneCount}
+- High-priority leads (score 85+): ${highPriorityCount}
+- CSV rows exported after filters: ${csvRows.length}
+
+### 🔥 Top Contactable Leads Table
+${topContactsTable}
 
 ### 📈 Analysis
 ${analysis}
@@ -424,20 +689,73 @@ ${fullCSV}
 
 ### 📧 Leads Ready for Email Outreach
 ${emailLeadsList}
+
+### 🧭 Recommended Next Steps
+- Run Email node on connected output immediately.
+- Use sendable leads table (excluding competitors/communities) as send source.
+- Run another research batch with alternate intent keywords to improve yield.
 `;
 
-        // Store student leads with emails for email agent
-        const emailableLeads = studentLeads.filter((r: any) => r.emails && r.emails.length > 0);
+        // Store both strict-student and broader sendable leads for Email node
+        const emailableLeads = emailableStudentLeads;
+        const snapshotResult = await saveWebResearchSnapshot({
+          runId,
+          workflowRunId,
+          nodeId,
+          createdAt: new Date().toISOString(),
+          csv: fullCSV,
+          leadsWithEmail: emailableSendableLeads.map((r: any) => ({
+            name: r.name,
+            email: r.emails[0],
+            score: r.relevance,
+          })),
+          summary: {
+            totalResults: processedResults.length,
+            studentLeads: studentLeads.length,
+            emailableLeads: emailableLeads.length,
+            emailableSendableLeads: emailableSendableLeads.length,
+            filters,
+          },
+        });
+
+        appendObservabilityLog('agents', {
+          event: 'web_research_completed',
+          runId,
+          workflowRunId,
+          nodeId,
+          nodeType: 'exa_research',
+          totalResults: processedResults.length,
+          studentLeads: studentLeads.length,
+          emailableLeads: emailableLeads.length,
+          emailableSendableLeads: emailableSendableLeads.length,
+          csvRows: csvRows.length,
+          cachePath: snapshotResult.latestPath,
+        });
 
         response = NextResponse.json({
           success: true,
           output,
           nodeId,
           metadata: {
+            runId,
+            workflowRunId,
+            nodeType: 'exa_research',
             totalResults: processedResults.length,
             studentLeads: studentLeads.length,
             emailableLeads: emailableLeads.length,
-            leadsWithEmail: emailableLeads.map((r: any) => ({
+            emailableSendableLeads: emailableSendableLeads.length,
+            cachePath: snapshotResult.latestPath,
+            studentLeadsWithEmail: emailableLeads.map((r: any) => ({
+              name: r.name,
+              email: r.emails[0],
+              score: r.relevance,
+            })),
+            allLeadsWithEmail: emailableSendableLeads.map((r: any) => ({
+              name: r.name,
+              email: r.emails[0],
+              score: r.relevance,
+            })),
+            leadsWithEmail: emailableSendableLeads.map((r: any) => ({
               name: r.name,
               email: r.emails[0],
               score: r.relevance,
@@ -582,6 +900,20 @@ ${emailLeadsList}
     if (context.nodeType === 'email') {
       const textModel = getFlashModel();
       try {
+        if (context.incomingEdges.length === 0) {
+          const autoContextNodes = (nodes as WorkflowNode[])
+            .filter((n) => n.id !== nodeId && n.data?.status === 'complete' && typeof n.data?.output === 'string' && n.data.output.trim())
+            .slice(-2);
+
+          if (autoContextNodes.length > 0) {
+            finalPrompt += `\n\nAUTO-CONTEXT (derived from latest completed workflow nodes):\n`;
+            for (const sourceNode of autoContextNodes) {
+              finalPrompt += `\n--- ${sourceNode.data?.label || sourceNode.id} (${sourceNode.data?.type || 'node'}) ---\n`;
+              finalPrompt += `${String(sourceNode.data?.output || '').substring(0, 2500)}\n`;
+            }
+          }
+        }
+
         // Generate the email content using AI
         console.log('[email] Generating email content with AI...');
         const generatedContent = await generateWithRetry(textModel, finalPrompt);
@@ -590,6 +922,7 @@ ${emailLeadsList}
         
         // Parse JSON response with better error handling
         let emailData;
+        let emailSequence: EmailTemplate[] = [];
         try {
           // Remove markdown code blocks if present
           let cleanedContent = generatedContent.trim();
@@ -597,26 +930,38 @@ ${emailLeadsList}
           // Remove ```json and ``` markers
           cleanedContent = cleanedContent.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
           
-          // Try to extract JSON from the response
-          const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            emailData = JSON.parse(jsonMatch[0]);
+          // Try parsing full JSON first (array or object)
+          let parsedPayload: any = null;
+          try {
+            parsedPayload = JSON.parse(cleanedContent);
+          } catch {
+            // Fallback to extracting JSON object if the model included prose
+            const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              parsedPayload = JSON.parse(jsonMatch[0]);
+            }
+          }
+
+          if (parsedPayload) {
+            emailSequence = normalizeEmailSequence(parsedPayload);
+            emailData = emailSequence[0] || null;
             console.log('[email] Successfully parsed JSON from AI response');
             console.log('[email] Parsed data:', {
-              subject: emailData.subject?.substring(0, 50),
-              htmlPreview: emailData.html?.substring(0, 100),
-              textPreview: emailData.text?.substring(0, 100),
+              sequenceCount: emailSequence.length,
+              subject: emailData?.subject?.substring(0, 50),
+              htmlPreview: emailData?.html?.substring(0, 100),
+              textPreview: emailData?.text?.substring(0, 100),
             });
           } else {
             throw new Error('No JSON object found in response');
           }
           
           // Validate and ensure required fields exist with content
-          if (!emailData.subject || typeof emailData.subject !== 'string' || emailData.subject.trim().length === 0) {
+          if (!emailData?.subject || typeof emailData.subject !== 'string' || emailData.subject.trim().length === 0) {
             throw new Error('Missing or empty subject field');
           }
           
-          if (!emailData.html || typeof emailData.html !== 'string' || emailData.html.trim().length === 0) {
+          if (!emailData?.html || typeof emailData.html !== 'string' || emailData.html.trim().length === 0) {
             throw new Error('Missing or empty html field');
           }
           
@@ -637,6 +982,13 @@ ${emailLeadsList}
           
           emailData.subject = cleanPlaceholders(emailData.subject);
           emailData.html = cleanPlaceholders(emailData.html);
+
+          emailSequence = emailSequence.map((template) => ({
+            ...template,
+            subject: cleanPlaceholders(template.subject),
+            html: cleanPlaceholders(template.html),
+            text: template.text ? cleanPlaceholders(template.text) : undefined,
+          }));
           
           // Ensure text version exists
           if (!emailData.text || typeof emailData.text !== 'string' || emailData.text.trim().length === 0) {
@@ -784,6 +1136,7 @@ Team Fateh Education`;
             html: htmlContent,
             text: textContent,
           };
+          emailSequence = [emailData];
           
           console.log('[email] Intelligent fallback email generated:', {
             subject,
@@ -796,131 +1149,132 @@ Team Fateh Education`;
 
         console.log('[email] Final email data ready:', {
           subject: emailData.subject,
+          sequenceCount: emailSequence.length,
           htmlLength: emailData.html?.length || 0,
           textLength: emailData.text?.length || 0,
           htmlPreview: emailData.html?.substring(0, 150),
         });
 
-        // Get email list - FIRST try from incoming edges (Web Research output), then from node data
+        // 1) Node manual recipient list (uploaded CSV), 2) connected Web Research nodes, 3) local cache fallback
         const node = (nodes as WorkflowNode[]).find(n => n.id === nodeId);
-        let emailList = (node?.data as any)?.emailList;
-        
-        // AGENTIC: Auto-find Web Research outputs from ANY node in the workflow (no manual connections needed!)
-        if (!emailList || !Array.isArray(emailList) || emailList.length === 0) {
-          console.log('[email] 🤖 AGENTIC MODE: Searching all nodes for Web Research outputs...');
-          
-          // Search through ALL nodes for exa_research type with completed output
-          const webResearchNodes = (nodes as WorkflowNode[]).filter(n => {
-            const nodeType = n.data?.type || n.type;
-            return nodeType === 'exa_research' && n.data?.output && n.data?.status === 'complete';
-          });
-          
-          console.log(`[email] Found ${webResearchNodes.length} completed Web Research node(s)`);
-          
-          for (const sourceNode of webResearchNodes) {
-            console.log('[email] Processing Web Research node:', sourceNode.id);
-            const output = sourceNode.data.output as string;
-            
-            console.log('[email] Output length:', output.length);
-            
-            // Extract CSV from output (look for csv code block)
-            const csvMatch = output.match(/```csv\s*([\s\S]*?)```/);
-            if (csvMatch) {
-              const csvContent = csvMatch[1].trim();
-              const lines = csvContent.split('\n').filter(l => l.trim());
-              
-              console.log('[email] Found CSV with', lines.length, 'lines');
-              
-              if (lines.length > 1) {
-                // Parse CSV header to find email column
-                  const header = lines[0].toLowerCase();
-                  const cols = header.split(',').map(c => c.replace(/"/g, '').trim());
-                  
-                  // Look for Email column first, then Contact Info as fallback
-                  let emailColIdx = cols.findIndex(c => c === 'email');
-                  const contactColIdx = cols.findIndex(c => c === 'contact info');
-                  const nameColIdx = cols.findIndex(c => c === 'name');
-                  const typeColIdx = cols.findIndex(c => c === 'type');
-                  
-                  if (emailColIdx !== -1 || contactColIdx !== -1) {
-                    const extractedList: { email: string; name?: string }[] = [];
-                    
-                    for (let i = 1; i < lines.length; i++) {
-                      // Simple CSV parse (handles quoted fields)
-                      const values: string[] = [];
-                      let current = '';
-                      let inQuotes = false;
-                      
-                      for (const char of lines[i]) {
-                        if (char === '"') {
-                          inQuotes = !inQuotes;
-                        } else if (char === ',' && !inQuotes) {
-                          values.push(current.trim());
-                          current = '';
-                        } else {
-                          current += char;
-                        }
-                      }
-                      values.push(current.trim());
-                      
-                      // Only send emails to Student Leads
-                      const type = typeColIdx !== -1 ? values[typeColIdx]?.replace(/"/g, '').trim() : '';
-                      if (type && !type.toLowerCase().includes('student')) {
-                        continue; // Skip non-student leads
-                      }
-                      
-                      // Get email from Email column or Contact Info column
-                      let email = '';
-                      if (emailColIdx !== -1) {
-                        email = values[emailColIdx]?.replace(/"/g, '').trim();
-                      }
-                      if (!email && contactColIdx !== -1) {
-                        const contact = values[contactColIdx]?.replace(/"/g, '').trim();
-                        if (contact && contact.includes('@') && !contact.toLowerCase().includes('inferred')) {
-                          email = contact;
-                        }
-                      }
-                      
-                      const name = nameColIdx !== -1 ? values[nameColIdx]?.replace(/"/g, '').trim() : undefined;
-                      
-                      // Validate email - must have @ and not be placeholder
-                      if (email && email.includes('@') && !email.includes('See URL') && !email.includes('(inferred)')) {
-                        extractedList.push({ email, name: name || undefined });
-                      }
-                    }
-                    
-                    if (extractedList.length > 0) {
-                      emailList = extractedList;
-                      console.log(`[email] ✅ Auto-extracted ${emailList.length} student lead emails from Web Research output`);
-                    } else {
-                      console.log('[email] ⚠️ No valid emails found in CSV (all were filtered or invalid)');
-                    }
-                  } else {
-                    console.log('[email] ⚠️ Email or Contact Info column not found in CSV');
-                }
-              } else {
-                console.log('[email] ⚠️ CSV has no data rows (only header)');
-              }
-            } else {
-              console.log('[email] ⚠️ No CSV code block found in output');
-            }
-          }
-        }
-        
-        console.log('[email] 🎯 Final emailList length:', emailList?.length || 0);
+        const initialManualList = Array.isArray((node?.data as any)?.emailList)
+          ? ((node?.data as any)?.emailList as EmailRecipient[])
+          : [];
+
+        const incomingSourceNodeIds = (edges as WorkflowEdge[])
+          .filter(edge => edge.target === nodeId)
+          .map(edge => edge.source);
+
+        const webResearchNodes = (nodes as WorkflowNode[]).filter(n => {
+          const nodeType = n.data?.type || n.type;
+          return nodeType === 'exa_research' && n.data?.status === 'complete';
+        });
+
+        const incomingResearchNodes = webResearchNodes.filter(n => incomingSourceNodeIds.includes(n.id));
+        const allResearchNodes = webResearchNodes;
+        const preferredResearchNodes = incomingResearchNodes.length > 0 ? incomingResearchNodes : allResearchNodes;
+
+        const cachedSnapshots = await Promise.all(
+          preferredResearchNodes.map(sourceNode => readLatestWebResearchSnapshot(sourceNode.id))
+        );
+
+        const cacheRecipientsBroad = dedupeRecipients(
+          cachedSnapshots.flatMap(snapshot => {
+            if (!snapshot || !Array.isArray(snapshot.leadsWithEmail)) return [];
+            return snapshot.leadsWithEmail.map((lead: any) => ({
+              email: lead?.email,
+              name: lead?.name,
+            }));
+          })
+        );
+
+        const metadataRecipientsStrict = dedupeRecipients(
+          preferredResearchNodes.flatMap(node => extractRecipientsFromNodeMetadata(node, 'studentLeadsWithEmail'))
+        );
+
+        const metadataRecipientsBroad = dedupeRecipients(
+          preferredResearchNodes.flatMap(node => [
+            ...extractRecipientsFromNodeMetadata(node, 'allLeadsWithEmail'),
+            ...extractRecipientsFromNodeMetadata(node, 'leadsWithEmail'),
+          ])
+        );
+
+        const csvRecipientsStrict = dedupeRecipients(
+          preferredResearchNodes.flatMap(sourceNode => extractRecipientsFromCsvOutput(sourceNode.data.output || '', { studentOnly: true }))
+        );
+
+        const csvRecipientsBroad = dedupeRecipients(
+          preferredResearchNodes.flatMap(sourceNode =>
+            extractRecipientsFromCsvOutput(sourceNode.data.output || '', {
+              excludeTypes: EXCLUDED_BROADCAST_TYPES,
+            })
+          )
+        );
+
+        const strictStudentEmailList = dedupeRecipients([
+          ...initialManualList,
+          ...metadataRecipientsStrict,
+          ...csvRecipientsStrict,
+        ]);
+
+        const broadEmailList = dedupeRecipients([
+          ...initialManualList,
+          ...cacheRecipientsBroad,
+          ...metadataRecipientsBroad,
+          ...csvRecipientsBroad,
+        ]);
+
+        const emailList = strictStudentEmailList.length > 0 ? strictStudentEmailList : broadEmailList;
+        const fallbackUsed = strictStudentEmailList.length === 0 && broadEmailList.length > 0;
+
+        const recipientDiscovery = {
+          runId,
+          workflowRunId,
+          sourceMode: incomingResearchNodes.length > 0 ? 'connected_nodes' : 'workflow_fallback',
+          fallbackUsed,
+          manualRecipients: initialManualList.length,
+          connectedResearchNodes: incomingResearchNodes.length,
+          totalResearchNodes: allResearchNodes.length,
+          strictRecipients: strictStudentEmailList.length,
+          broadRecipients: broadEmailList.length,
+          cacheRecipients: cacheRecipientsBroad.length,
+          metadataRecipientsStrict: metadataRecipientsStrict.length,
+          metadataRecipientsBroad: metadataRecipientsBroad.length,
+          csvRecipientsStrict: csvRecipientsStrict.length,
+          csvRecipientsBroad: csvRecipientsBroad.length,
+          finalRecipients: emailList.length,
+        };
+
+        console.log('[email] recipient discovery', recipientDiscovery);
+        appendObservabilityLog('workflows', {
+          event: 'email_recipients_resolved',
+          nodeId,
+          ...recipientDiscovery,
+        });
 
         if (!emailList || !Array.isArray(emailList) || emailList.length === 0) {
           // Return helpful output with instructions
           const webResearchCount = (nodes as WorkflowNode[]).filter(n => (n.data?.type || n.type) === 'exa_research').length;
           const debugInfo = webResearchCount > 0 ? 
-            `\n\n🔍 Found ${webResearchCount} Web Research node(s) in workflow, but no valid Student Lead emails extracted. Make sure Web Research has completed successfully.` : 
+            `\n\n🔍 Found ${webResearchCount} Web Research node(s) in workflow, but no valid emails were extracted. Check the Web Research output table and cache file.` : 
             '\n\n💡 Add a Web Research node to your workflow and run it first to extract leads automatically!';
           
           response = NextResponse.json({ 
             success: true,
             output: `✉️ Email Campaign Ready!\n\n**Subject:** ${emailData.subject}\n\n⚠️ **No email recipients found**${debugInfo}\n\n**🤖 AGENTIC MODE:** This email agent automatically searches for completed Web Research outputs in your workflow - no manual connections needed!\n\n**To send this campaign:**\n1. Add a Web Research node and run it first (it will find student leads with emails)\n2. Then run this Email node - it will automatically use those leads!\n\n**Preview:**\n${emailData.text?.substring(0, 300) || emailData.html?.substring(0, 300)}...\n\n---\n📧 *Emails are sent only to Student Leads, not competitors or communities*`,
             nodeId,
-            metadata: emailData,
+            metadata: {
+              ...emailData,
+              recipientDiscovery,
+            },
+          });
+          appendObservabilityLog('agents', {
+            event: 'email_node_no_recipients',
+            runId,
+            workflowRunId,
+            nodeId,
+            subject: emailData.subject,
+            recipientDiscovery,
           });
           return response;
         }
@@ -937,6 +1291,13 @@ Team Fateh Education`;
             subject: emailData.subject,
             html: emailData.html,
             text: emailData.text,
+            sequence: emailSequence,
+            campaignContext: {
+              runId,
+              workflowRunId,
+              sourceNodeId: nodeId,
+              sourceNodeType: context.nodeType,
+            },
           }),
         });
 
@@ -944,30 +1305,59 @@ Team Fateh Education`;
         console.log('[email] Send result:', sendData);
 
         if (!sendRes.ok || !sendData.success) {
+          const firstDeliveryError = Array.isArray(sendData?.errors) && sendData.errors.length > 0
+            ? sendData.errors[0]
+            : null;
           response = NextResponse.json({ 
-            success: true, 
-            output: `Email content generated:\n\nSubject: ${emailData.subject}\n\n⚠️ Failed to send emails: ${sendData.error || 'Unknown error'}\n\nDetails: ${JSON.stringify(sendData.details || {})}`,
+            success: false,
+            error: `Failed to send campaign emails: ${sendData.error || 'Unknown error'}`,
+            details: {
+              providerDetails: sendData.details || null,
+              firstDeliveryError,
+              remediation: 'Verify RESEND domain for production sending OR configure GMAIL_USER and GMAIL_APP_PASSWORD.',
+            },
             nodeId,
-            metadata: emailData,
-          });
+            metadata: {
+              ...emailData,
+              recipientDiscovery,
+            },
+          }, { status: sendRes.status || 502 });
           return response;
         }
 
         const errorSummary = sendData.errors && sendData.errors.length > 0 
           ? `\n\n⚠️ Some emails failed (${sendData.failed}/${sendData.total}):\n${sendData.errors.slice(0, 3).join('\n')}`
           : '';
+        const fallbackSummary = fallbackUsed
+          ? '\n\nℹ️ No student-email rows found, so fallback recipient mode was used (excluding competitors/communities).'
+          : '';
 
         response = NextResponse.json({ 
           success: true, 
-          output: `✅ Email campaign sent successfully!\n\nSubject: ${emailData.subject}\n\n📧 Sent: ${sendData.sent}/${sendData.total} emails${errorSummary}\n\nRecipients: ${emailList.slice(0, 5).map((r: any) => typeof r === 'string' ? r : r.email).join(', ')}${emailList.length > 5 ? ` and ${emailList.length - 5} more...` : ''}`,
+          output: `✅ Email campaign sent successfully!\n\nSubject: ${emailData.subject}\n\n📧 Sent: ${sendData.sent}/${sendData.total} emails${sendData.sequenceLength ? ` across ${sendData.sequenceLength} sequence step(s)` : ''}${errorSummary}${fallbackSummary}\n\nRecipients: ${emailList.slice(0, 5).map((r: any) => typeof r === 'string' ? r : r.email).join(', ')}${emailList.length > 5 ? ` and ${emailList.length - 5} more...` : ''}`,
           nodeId,
           metadata: {
             ...emailData,
+            sequenceLength: emailSequence.length,
+            recipientDiscovery,
             sendStats: {
               sent: sendData.sent,
               failed: sendData.failed,
               total: sendData.total,
             },
+          },
+        });
+        appendObservabilityLog('agents', {
+          event: 'email_node_completed',
+          runId,
+          workflowRunId,
+          nodeId,
+          subject: emailData.subject,
+          recipientDiscovery,
+          sendStats: {
+            sent: sendData.sent,
+            failed: sendData.failed,
+            total: sendData.total,
           },
         });
         return response;
@@ -1207,6 +1597,33 @@ Team Fateh Education`;
     );
     return response;
   } finally {
+    const statusCode = response?.status || (error ? 500 : 200);
+    const finalSummary = {
+      ...executionSummary,
+      nodeType: requestPayload?.nodes?.find?.((n: any) => n.id === requestPayload?.nodeId)?.data?.type || null,
+      statusCode,
+      success: !error && statusCode < 400,
+      durationMs: Date.now() - startTime,
+      errorMessage: error?.message || null,
+    };
+
+    appendObservabilityLog('unified-executor', {
+      event: 'node_execution_finished',
+      ...finalSummary,
+    });
+
+    appendObservabilityLog('agents', {
+      event: 'agent_output_summary',
+      ...finalSummary,
+    });
+
+    if (error || statusCode >= 400) {
+      appendObservabilityLog('errors', {
+        event: 'agent_execution_error',
+        ...finalSummary,
+      });
+    }
+
     // Log audit event (non-blocking)
     logAuditEvent({
       request,
@@ -1214,7 +1631,7 @@ Team Fateh Education`;
       session,
       error,
       action: 'execute_workflow_node',
-      metadata: { nodeId: (request as any).nodeId },
+      metadata: finalSummary,
       startTime,
     }).catch(() => {});
   }

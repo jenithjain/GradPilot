@@ -103,13 +103,14 @@ function AgentNode({ data, id }) {
           edges,
           brief,
           strategy: strategy?.rationale || '',
+          workflowRunId: `wf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         }),
       });
 
       const result = await response.json();
 
       if (result.success) {
-        updateNodeStatus(id, 'complete', result.output);
+        updateNodeStatus(id, 'complete', result.output, undefined, result.metadata);
       } else {
         updateNodeStatus(id, 'error', undefined, result.error);
       }
