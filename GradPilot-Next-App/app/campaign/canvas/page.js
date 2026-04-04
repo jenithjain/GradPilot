@@ -87,6 +87,7 @@ export default function CampaignCanvasPage() {
   const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(false);
   const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
   const [kycProfile, setKycProfile] = useState(null);
+  const [activeWorkflowRunId, setActiveWorkflowRunId] = useState(null);
 
   const {
     nodes: storeNodes,
@@ -216,6 +217,8 @@ export default function CampaignCanvasPage() {
   const handleRunAll = async () => {
     try {
       setIsRunning(true);
+      const workflowRunId = `wf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      setActiveWorkflowRunId(workflowRunId);
       
       // Get initial execution order
       let currentNodes = [...storeNodes];
@@ -249,16 +252,17 @@ export default function CampaignCanvasPage() {
               edges: storeEdges,
               brief,
               strategy: strategy?.rationale || '',
+              workflowRunId,
             }),
           });
           const result = await response.json();
           if (result.success) {
-            updateNodeStatus(nodeId, 'complete', result.output);
+            updateNodeStatus(nodeId, 'complete', result.output, undefined, result.metadata);
             
             // Update current nodes with the new output
             currentNodes = currentNodes.map(n => 
               n.id === nodeId 
-                ? { ...n, data: { ...n.data, status: 'complete', output: result.output, error: undefined } }
+                ? { ...n, data: { ...n.data, status: 'complete', output: result.output, error: undefined, metadata: result.metadata } }
                 : n
             );
             
@@ -282,6 +286,7 @@ export default function CampaignCanvasPage() {
     } finally {
       setIsRunning(false);
       setExecutingNodeId(null);
+      setActiveWorkflowRunId(null);
     }
   };
 
@@ -294,6 +299,7 @@ export default function CampaignCanvasPage() {
         status: 'idle',
         output: undefined,
         error: undefined,
+        metadata: undefined,
       }
     }));
     setWorkflow(resetNodes, storeEdges);
@@ -406,11 +412,12 @@ export default function CampaignCanvasPage() {
           edges: storeEdges,
           brief,
           strategy: strategy?.rationale || '',
+          workflowRunId: activeWorkflowRunId || `wf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         }),
       });
       const result = await response.json();
       if (result.success) {
-        updateNodeStatus(nodeId, 'complete', result.output);
+        updateNodeStatus(nodeId, 'complete', result.output, undefined, result.metadata);
         setEditingNodeOutput(result.output);
         toast.success('Node regenerated');
       } else {

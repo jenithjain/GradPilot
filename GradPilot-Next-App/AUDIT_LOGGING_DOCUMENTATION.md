@@ -295,8 +295,37 @@ For optimal query performance:
 
 ## Configuration
 
+## Local Agent Observability (Filesystem)
+
+In addition to MongoDB audit logs, runtime agent logs are written locally under:
+
+- `agent-logs/agents/`
+- `agent-logs/ai-provider/`
+- `agent-logs/ai-sdk-executor/`
+- `agent-logs/api/`
+- `agent-logs/errors/`
+- `agent-logs/unified-executor/`
+- `agent-logs/workflows/`
+
+Each category writes daily JSONL files named `YYYY-MM-DD.log`.
+
+### Web Research Local Cache
+
+Web Research node snapshots are stored in:
+
+- `agent-logs/workflows/web-research-cache/<nodeId>.json` (latest)
+- `agent-logs/workflows/web-research-cache/<nodeId>-<runId>.json` (history)
+
+The Email node first checks connected Web Research nodes and their local cache snapshots, then falls back to workflow-level discovery when no connected research node exists.
+
 ### Environment Variables
 No additional environment variables needed. Uses existing `MONGODB_URI`.
+
+For email campaign behavior:
+
+- `GMAIL_USER` and `GMAIL_APP_PASSWORD` are required for Gmail sending.
+- `ENABLE_TEST_COPY=true` enables optional monitoring copy to the configured test inbox.
+- When `ENABLE_TEST_COPY` is not set, only actual recipient emails are sent (no test copy subject prefix).
 
 ### TTL (Time To Live)
 Logs auto-delete after 90 days. To change:
