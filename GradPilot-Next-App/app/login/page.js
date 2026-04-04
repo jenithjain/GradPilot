@@ -116,6 +116,7 @@ export default function LoginPage() {
         
         // Small delay for better UX
         setTimeout(() => {
+          // Always go to dashboard after signup/signin — onboarding is initiated from the dashboard
           router.push("/dashboard");
           router.refresh();
         }, 500);
@@ -133,6 +134,7 @@ export default function LoginPage() {
     
     try {
       await signIn("google", { 
+        callbackUrl: "/dashboard"
         callbackUrl: "/dashboard"
       });
     } catch (err) {

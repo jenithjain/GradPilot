@@ -36,6 +36,9 @@ export async function proxy(request) {
     return NextResponse.redirect(loginUrl);
   }
 
+  // If user is authenticated but hasn't completed KYC, allow access to dashboard
+  // (onboarding is now initiated from the dashboard via "Start Your Journey")
+
   // If user completed KYC and tries to access onboarding, redirect to dashboard
   if (token && token.hasCompletedKYC && pathname === '/onboarding') {
     const dashboardUrl = new URL('/dashboard', request.url);
