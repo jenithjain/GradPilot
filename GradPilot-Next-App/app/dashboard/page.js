@@ -60,8 +60,8 @@ export default function Dashboard() {
               <Target className="mr-2 h-4 w-4" />
               Launch Follow-up
             </Button>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
         <Card className="border-border/40 bg-card/50 backdrop-blur-sm">
           <CardContent className="flex flex-col items-center justify-center gap-6 py-16">

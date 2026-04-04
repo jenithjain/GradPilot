@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import StaggeredMenu from "@/components/StaggeredMenu";
-import PredictionLogsSidebar from "@/components/PredictionLogsSidebar";
 
 export default function DashboardLayout({ children }) {
   const [menuBtnColor, setMenuBtnColor] = useState('#000000');
@@ -28,9 +27,6 @@ export default function DashboardLayout({ children }) {
 
   return (
     <>
-      {/* Prediction Logs Sidebar */}
-      <PredictionLogsSidebar />
-      
       {/* Navbar */}
       <div className="fixed top-0 left-0 right-0 z-50 pointer-events-none">
         <div className="pointer-events-auto">

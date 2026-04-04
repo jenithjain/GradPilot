@@ -133,8 +133,8 @@ export default function LoginPage() {
     const toastId = toast.loading("Redirecting to Google...");
     
     try {
-      // Pass a custom callbackUrl that we'll handle in the callback
       await signIn("google", { 
+        callbackUrl: "/dashboard"
         callbackUrl: "/dashboard"
       });
     } catch (err) {

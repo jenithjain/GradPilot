@@ -9,7 +9,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import StaggeredMenu from '@/components/StaggeredMenu';
-import { Loader2, ChevronRight, ChevronLeft, CheckCircle2, Building2, DollarSign, Users, Target, Megaphone, Package, TrendingUp, FileCheck, Save, Upload, FileText, X, GraduationCap, BookOpen, Globe, Clock } from 'lucide-react';
+import { Loader2, ChevronRight, ChevronLeft, CheckCircle2, Building2, DollarSign, Users, Target, Megaphone, Package, TrendingUp, FileCheck, Save, Upload, FileText, X, GraduationCap, BookOpen, Globe, Clock, Mic, PencilLine } from 'lucide-react';
+
+const JOURNEY_AVATARS = [
+  { id: 'spiderman', name: 'Spiderman', src: '/avatars/spiderman-removebg-preview.png' },
+  { id: 'hulk', name: 'Hulk', src: '/avatars/hulk-removebg-preview.png' },
+  { id: 'thor', name: 'Thor', src: '/avatars/thor-removebg-preview.png' },
+  { id: 'ironman', name: 'Iron Man', src: '/avatars/ironman-removebg-preview.png' },
+];
 
 const kycSteps = [
   {
@@ -170,6 +177,8 @@ const kycSteps = [
 export default function KYCOnboardingPage() {
   const { data: session, update } = useSession();
   const router = useRouter();
+  const [selectedAvatar, setSelectedAvatar] = useState(null);
+  const [showKycForm, setShowKycForm] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -457,6 +466,69 @@ export default function KYCOnboardingPage() {
 
       <div className="relative min-h-screen p-4 flex items-center justify-center pt-24">
       <div className="w-full max-w-3xl">
+        {!showKycForm ? (
+          <Card className="border-border/40 backdrop-blur-sm bg-card/50">
+            <CardHeader>
+              <CardTitle className="ivy-font">Start your journey with GradPilot</CardTitle>
+              <CardDescription className="ivy-font">
+                Choose your avatar, then pick how you want to continue.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div>
+                <h3 className="text-base font-semibold ivy-font mb-3">Choose your avatar</h3>
+                <div className="flex flex-wrap items-center gap-3">
+                  {JOURNEY_AVATARS.map((avatar) => (
+                    <button
+                      key={avatar.id}
+                      type="button"
+                      onClick={() => setSelectedAvatar(avatar.id)}
+                      title={avatar.name}
+                      className={`rounded-full border p-1.5 transition-all ${
+                        selectedAvatar === avatar.id
+                          ? 'border-emerald-500 bg-emerald-500/10'
+                          : 'border-border bg-muted/30 hover:border-emerald-500/40'
+                      }`}
+                    >
+                      <img
+                        src={avatar.src}
+                        alt={avatar.name}
+                        className="w-14 h-14 rounded-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-base font-semibold ivy-font">How would you like to continue?</h3>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button
+                    variant="outline"
+                    className="ivy-font"
+                    onClick={() => setShowKycForm(true)}
+                    disabled={!selectedAvatar}
+                  >
+                    <PencilLine className="w-4 h-4 mr-2" />
+                    Fill Manually
+                  </Button>
+                  <Button
+                    className="bg-emerald-500 hover:bg-emerald-600 text-white ivy-font"
+                    onClick={() => toast.success('Voice agent flow will be connected next')}
+                    disabled={!selectedAvatar}
+                  >
+                    <Mic className="w-4 h-4 mr-2" />
+                    Fill with Voice Agent
+                  </Button>
+                </div>
+                {!selectedAvatar && (
+                  <p className="text-xs text-muted-foreground ivy-font">Select an avatar to continue.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+        <>
         {/* Save Progress Button */}
         <div className="mb-4 flex justify-end">
           <Button
@@ -779,6 +851,8 @@ export default function KYCOnboardingPage() {
             </div>
           </CardContent>
         </Card>
+        </>
+        )}
       </div>
       </div>
     </div>

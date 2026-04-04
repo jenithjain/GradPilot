@@ -1,6 +1,6 @@
 // Campaign AI Workflow Types
 
-export type NodeType = 'strategy' | 'copy' | 'image' | 'research' | 'timeline' | 'distribution' | 'linkedin' | 'twitter' | 'email';
+export type NodeType = 'strategy' | 'copy' | 'image' | 'research' | 'exa_research' | 'timeline' | 'distribution' | 'linkedin' | 'twitter' | 'email';
 
 export type NodeStatus = 'idle' | 'loading' | 'complete' | 'error';
 
