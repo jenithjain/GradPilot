@@ -211,17 +211,46 @@ Return ONLY a JSON array of search query strings. Make queries specific with nam
         }
         
         console.log(`[${context.nodeType}] Found ${imageUrls.length} images to attach`);
+
+        // Resolve connected social token from the current authenticated user.
+        // execute-node calls post routes server-to-server, so cookies/session are not automatically forwarded.
+        let userSocialToken: string | undefined;
+        try {
+          if (session?.user?.id) {
+            await dbConnect();
+            const socialUser = await (User as any)
+              .findById(session.user.id)
+              .select('+socialTokens.twitter.access_token +socialTokens.linkedin.access_token')
+              .lean();
+
+            if (context.nodeType === 'twitter') {
+              userSocialToken = socialUser?.socialTokens?.twitter?.access_token;
+            } else {
+              userSocialToken = socialUser?.socialTokens?.linkedin?.access_token;
+            }
+
+            console.log(`[${context.nodeType}] User social token present: ${!!userSocialToken}`);
+          }
+        } catch (tokenErr) {
+          console.warn(`[${context.nodeType}] Failed to resolve user social token:`, tokenErr);
+        }
         
         // Post to the social platform using app credentials
         const apiEndpoint = context.nodeType === 'linkedin' ? '/api/linkedin/post' : '/api/twitter/post';
         const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        const postPayload: any = { text: postText, imageUrls };
+        if (userSocialToken) {
+          postPayload.access_token = userSocialToken;
+        } else {
+          console.warn(`[${context.nodeType}] No user social token found, falling back to app-level credentials.`);
+        }
         
         console.log(`[${context.nodeType}] Attempting to post to ${baseUrl}${apiEndpoint}`);
         
         const postRes = await fetch(`${baseUrl}${apiEndpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: postText, imageUrls }),
+          body: JSON.stringify(postPayload),
         });
         
         const postData = await postRes.json();
@@ -578,21 +607,81 @@ Team Fateh Education`;
           return response;
         }
 
-        const visualPrompts = videoData.visualPrompts || [];
-        console.log(`[video] Generated ${visualPrompts.length} visual prompts`);
+        const rawVisualPrompts = Array.isArray(videoData.visualPrompts) ? videoData.visualPrompts : [];
+        const adBeatOrder = ['hook', 'proof', 'cta'];
+
+        const visualPrompts = rawVisualPrompts
+          .slice(0, 3)
+          .map((scene: any, idx: number) => {
+            const adBeat = typeof scene?.adBeat === 'string'
+              ? scene.adBeat.toLowerCase()
+              : adBeatOrder[idx];
+
+            const sceneName = typeof scene?.sceneName === 'string' && scene.sceneName.trim().length > 0
+              ? scene.sceneName.trim()
+              : `${adBeat.charAt(0).toUpperCase()}${adBeat.slice(1)} Scene ${idx + 1}`;
+
+            const mood = typeof scene?.mood === 'string' && scene.mood.trim().length > 0
+              ? scene.mood.trim()
+              : (adBeat === 'hook' ? 'aspirational' : adBeat === 'cta' ? 'confident' : 'trustworthy');
+
+            const transition = typeof scene?.transition === 'string' && scene.transition.trim().length > 0
+              ? scene.transition.trim()
+              : (idx === 0 ? 'cold open to establish context' : 'smooth continuity cut from previous scene');
+
+            const durationNum = Number(scene?.duration);
+            const duration = Number.isFinite(durationNum)
+              ? Math.min(10, Math.max(4, Math.round(durationNum)))
+              : 10;
+
+            const basePrompt = typeof scene?.prompt === 'string' ? scene.prompt.trim() : '';
+            const dialogue = typeof scene?.dialogue === 'string' ? scene.dialogue.trim() : '';
+            const onScreenText = typeof scene?.onScreenText === 'string' ? scene.onScreenText.trim() : '';
+            const aspectRatio = typeof scene?.aspectRatio === 'string' && scene.aspectRatio.trim().length > 0
+              ? scene.aspectRatio.trim()
+              : '16:9';
+
+            const details: string[] = [];
+            if (dialogue) details.push(`Spoken line cue: ${dialogue}`);
+            if (onScreenText) details.push(`On-screen text cue: ${onScreenText}`);
+
+            const qualityTail = 'Professional education advertisement style, premium cinematography, smooth camera movement, realistic people, clear framing, no third-party logos or trademarks.';
+            const prompt = `${basePrompt}${basePrompt.endsWith('.') ? '' : '.'} ${details.join(' ')} ${qualityTail}`.trim();
+
+            return {
+              sceneName,
+              adBeat,
+              prompt,
+              duration,
+              aspectRatio,
+              mood,
+              transition,
+              dialogue,
+              onScreenText,
+            };
+          })
+          .filter((scene: any) => scene.prompt && scene.prompt.length > 0);
+
+        console.log(`[video] Generated ${visualPrompts.length} normalized visual prompts`);
 
         // Build structured output with visual prompts ready for Veo generation
         const payload = JSON.stringify({
           visualPrompts,
           projectName: videoData.projectName || 'Campaign Video',
-          concept: videoData.concept || '',
+          concept: videoData.concept || 'Education ad with aspiration, trust, and clear CTA',
+          targetAudience: videoData.targetAudience || 'Students and parents considering overseas education',
+          keyMessage: videoData.keyMessage || 'Expert counselling turns study abroad goals into admissions outcomes',
           meta: {
             type: 'video_concepts',
             count: visualPrompts.length,
             scenes: visualPrompts.map((p: any) => ({
               sceneName: p.sceneName,
+              adBeat: p.adBeat,
               mood: p.mood,
-              duration: p.duration || 5,
+              duration: p.duration || 10,
+              transition: p.transition,
+              hasDialogue: !!p.dialogue,
+              hasOnScreenText: !!p.onScreenText,
             })),
           }
         });

@@ -13,9 +13,26 @@ export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
   const state = searchParams.get('state');
+
+  const storedState = req.cookies.get('twitter_oauth_state')?.value;
+  const codeVerifier = req.cookies.get('twitter_code_verifier')?.value;
+
   if (!code) {
-    return NextResponse.redirect('/profile?error=twitter_auth_failed');
+    return NextResponse.redirect(new URL('/profile?error=twitter_auth_failed', req.url));
   }
+
+  if (!state || !storedState || state !== storedState) {
+    return NextResponse.redirect(new URL('/profile?error=twitter_state_mismatch', req.url));
+  }
+
+  if (!codeVerifier) {
+    return NextResponse.redirect(new URL('/profile?error=twitter_code_verifier_missing', req.url));
+  }
+
+  if (!TWITTER_CLIENT_ID || !TWITTER_CLIENT_SECRET) {
+    return NextResponse.redirect(new URL('/profile?error=twitter_client_config_missing', req.url));
+  }
+
   // Exchange code for access token
   const tokenRes = await fetch('https://api.twitter.com/2/oauth2/token', {
     method: 'POST',
@@ -25,31 +42,45 @@ export async function GET(req) {
       code,
       redirect_uri: TWITTER_REDIRECT_URI,
       client_id: TWITTER_CLIENT_ID,
-      code_verifier: state, // For demo, use state as code_verifier
+      code_verifier: codeVerifier,
     }),
   });
   const tokenData = await tokenRes.json();
   if (!tokenData.access_token) {
-    return NextResponse.redirect('/profile?error=twitter_token_failed');
+    return NextResponse.redirect(new URL('/profile?error=twitter_token_failed', req.url));
   }
-  
+
   // Store token in user's account
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.redirect(new URL('/profile?error=twitter_session_missing', req.url));
+  }
+
   try {
-    const session = await getServerSession(authOptions);
-    if (session?.user?.id) {
-      await dbConnect();
-      await User.findByIdAndUpdate(session.user.id, {
+    await dbConnect();
+    const updated = await User.findByIdAndUpdate(
+      session.user.id,
+      {
         'socialTokens.twitter': {
           access_token: tokenData.access_token,
           refresh_token: tokenData.refresh_token,
           expires_in: tokenData.expires_in,
           connected_at: new Date()
         }
-      });
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      return NextResponse.redirect(new URL('/profile?error=twitter_user_not_found', req.url));
     }
   } catch (error) {
     console.error('Error storing Twitter token:', error);
+    return NextResponse.redirect(new URL('/profile?error=twitter_store_failed', req.url));
   }
-  
-  return NextResponse.redirect('/profile?twitter=connected');
+
+  const response = NextResponse.redirect(new URL('/profile?twitter=connected', req.url));
+  response.cookies.set('twitter_oauth_state', '', { path: '/', maxAge: 0 });
+  response.cookies.set('twitter_code_verifier', '', { path: '/', maxAge: 0 });
+  return response;
 }

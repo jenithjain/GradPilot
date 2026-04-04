@@ -102,8 +102,9 @@ export async function POST(request) {
       prompt,
       aspectRatio = '16:9',
       resolution = '720p',
-      duration = 5,
+      duration = 10,
       negativePrompt = '',
+      allowSilentFallback = false,
       workflowId,
       agentType = 'cinematic-teaser',
       agentId,
@@ -122,10 +123,38 @@ export async function POST(request) {
       );
     }
 
-    const validDuration = Math.min(8, Math.max(4, parseInt(duration) || 5));
+    const requestedDuration = parseInt(duration) || 10;
+    const validDuration = Math.min(10, Math.max(4, requestedDuration));
+
+    const promptEnhancer = [
+      'Create a polished education advertisement video clip.',
+      'Support person-led storytelling, natural speaking moments, and short on-screen CTA text where requested.',
+      'Keep visuals professional, family-safe, and realistic with smooth cinematic motion.'
+    ].join(' ');
+    const finalPrompt = `${promptEnhancer}\n${String(prompt).trim()}`;
+
+    const defaultNegativePrompt = [
+      'low quality',
+      'blurry',
+      'pixelated',
+      'shaky camera',
+      'jitter',
+      'chaotic composition',
+      'meme style',
+      'amateur look',
+      'distorted faces',
+      'artifacts',
+      'oversaturated colors',
+      'watermark',
+      'collage',
+      'split screen',
+      'third-party logos'
+    ].join(', ');
+
+    const effectiveNegativePrompt = String(negativePrompt || '').trim() || defaultNegativePrompt;
 
     console.log('🎬 Starting Veo video generation...');
-    console.log('Prompt:', prompt.substring(0, 100) + '...');
+    console.log('Prompt:', finalPrompt.substring(0, 120) + '...');
     console.log('Config:', { aspectRatio, resolution, duration: validDuration });
 
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -147,13 +176,11 @@ export async function POST(request) {
 
     if (resolution === '720p') {
       configParams.duration_seconds = validDuration;
-    } else if ((resolution === '1080p' || resolution === '4k') && validDuration === 8) {
-      configParams.duration_seconds = 8;
+    } else if (resolution === '1080p' || resolution === '4k') {
+      configParams.duration_seconds = Math.min(8, validDuration);
     }
 
-    if (negativePrompt) {
-      configParams.negative_prompt = negativePrompt;
-    }
+    configParams.negative_prompt = effectiveNegativePrompt;
 
     console.log('📤 Sending request to Veo API...');
 
@@ -173,7 +200,7 @@ export async function POST(request) {
         console.log(`🎬 Trying model: ${model}`);
         operation = await client.models.generateVideos({
           model: model,
-          prompt: prompt,
+          prompt: finalPrompt,
           config: configParams,
         });
         usedModel = model;
@@ -199,7 +226,7 @@ export async function POST(request) {
 
     videoOperations.set(operationId, {
       operation,
-      prompt,
+      prompt: finalPrompt,
       config: configParams,
       status: 'processing',
       startedAt: new Date().toISOString(),
@@ -214,7 +241,8 @@ export async function POST(request) {
       sceneName,
       sceneDetails,
       projectName,
-      draftName
+      draftName,
+      allowSilentFallback: Boolean(allowSilentFallback)
     });
 
     userLastGeneration.set(userId, Date.now());
@@ -230,7 +258,7 @@ export async function POST(request) {
         prompt: prompt.substring(0, 100) + '...',
         aspectRatio,
         resolution,
-        duration: `${validDuration}s`,
+        duration: `${configParams.duration_seconds || validDuration}s`,
       },
       estimatedTime: '30s - 2min for short clips',
       timestamp: new Date().toISOString(),
@@ -388,8 +416,8 @@ export async function GET(request) {
         const reasonText = reasons.length > 0 ? reasons[0] : '';
         const isAudioIssue = reasonText.toLowerCase().includes('audio');
 
-        // If audio-related and not already a Veo 2 retry, auto-retry with silent model
-        if (isAudioIssue && !storedOp.isVeo2Retry) {
+        // If audio-related and caller explicitly allows it, retry with silent model
+        if (isAudioIssue && storedOp.allowSilentFallback && !storedOp.isVeo2Retry) {
           console.log('🔇 Audio safety filter triggered — retrying with Veo 2.0 (silent model)...');
           try {
             const { GoogleGenAI } = await import('@google/genai');
@@ -445,7 +473,9 @@ export async function GET(request) {
           shouldPoll: false,
           concept: {
             prompt: storedOp.prompt,
-            tip: 'Try rephrasing with more generic, professional language. Avoid mentioning specific people, brands, or controversial topics.',
+            tip: isAudioIssue
+              ? 'Audio-related filtering occurred. Keep dialogue short and natural, avoid copyrighted tracks, and avoid explicit voiceover scripts. You can opt into silent fallback with allowSilentFallback=true.'
+              : 'Try rephrasing with more generic, professional language. Avoid mentioning specific people, brands, or controversial topics.',
           }
         });
       }
