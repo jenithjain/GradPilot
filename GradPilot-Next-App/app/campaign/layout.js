@@ -1,11 +1,22 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { useSession } from "next-auth/react";
 import StaggeredMenu from "@/components/StaggeredMenu";
 
 export default function CampaignLayout({ children }) {
+  const { data: session, status: authStatus } = useSession();
+  const router = useRouter();
+  const pathname = usePathname();
   const [menuBtnColor, setMenuBtnColor] = useState('#000000');
+
+  // RBAC: Only counsellors can access Campaign AI
+  useEffect(() => {
+    if (authStatus === 'authenticated' && session?.user?.role !== 'counsellor') {
+      router.replace('/dashboard');
+    }
+  }, [session, authStatus, router]);
 
   useEffect(() => {
     const updateColor = () => {
@@ -24,7 +35,16 @@ export default function CampaignLayout({ children }) {
     return () => observer.disconnect();
   }, []);
 
-  const pathname = usePathname();
+  if (authStatus === 'loading') {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (authStatus === 'authenticated' && session?.user?.role !== 'counsellor') return null;
+
   const hideMenu = pathname.endsWith('/campaign/canvas');
 
   return (
@@ -41,17 +61,8 @@ export default function CampaignLayout({ children }) {
               menuButtonColor={menuBtnColor}
               openMenuButtonColor="#22c55e"
               items={[
-                { label: "Home", link: "/", ariaLabel: "Go to Home" },
-                { label: "Dashboard", link: "/dashboard", ariaLabel: "View Dashboard" },
+                { label: "Dashboard", link: "/dashboard/counsellor", ariaLabel: "Counsellor Dashboard" },
                 { label: "Campaign AI", link: "/campaign", ariaLabel: "AI Campaign Generator" },
-                { label: "Audit Log", link: "/audit", ariaLabel: "View Audit Log" },
-                { label: "Profile", link: "/profile", ariaLabel: "View Profile" },
-                { label: "Login", link: "/login", ariaLabel: "Login to your account" },
-              ]}
-              socialItems={[
-                { label: "LinkedIn", link: "https://linkedin.com" },
-                { label: "Twitter", link: "https://x.com" },
-                { label: "GitHub", link: "https://github.com" },
               ]}
             />
           </div>

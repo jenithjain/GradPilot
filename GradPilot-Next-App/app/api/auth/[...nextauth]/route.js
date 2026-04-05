@@ -123,15 +123,19 @@ export const authOptions = {
           let existingUser = await User.findOne({ email: normalizedEmail });
 
           if (!existingUser) {
-            // Create new user for Google OAuth — default to student role
+            // Create new user for Google OAuth
+            // Assign counsellor role to known counsellor emails
+            const counsellorEmails = ['jenithjain09@gmail.com'];
+            const isCounsellor = counsellorEmails.includes(normalizedEmail);
+
             existingUser = await User.create({
               email: normalizedEmail,
               name: user.name,
               image: user.image,
               googleId: profile.sub,
               authProvider: 'google',
-              role: 'student',
-              hasCompletedKYC: false
+              role: isCounsellor ? 'counsellor' : 'student',
+              hasCompletedKYC: isCounsellor ? true : false,
             });
           } else {
             // Check if user signed up with credentials

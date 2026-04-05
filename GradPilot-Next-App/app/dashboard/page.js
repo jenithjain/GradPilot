@@ -31,8 +31,15 @@ const AVATARS = [
 
 export default function Dashboard() {
   const router = useRouter();
-  const { update: updateSession } = useSession();
+  const { data: session, update: updateSession } = useSession();
   const [showJourneyModal, setShowJourneyModal] = useState(false);
+
+  // RBAC: Redirect counsellors to their dedicated dashboard
+  useEffect(() => {
+    if (session?.user?.role === 'counsellor') {
+      router.replace('/dashboard/counsellor');
+    }
+  }, [session, router]);
   const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
   const [showFillMethod, setShowFillMethod] = useState(false);
   const [showVoiceAgent, setShowVoiceAgent] = useState(false);
