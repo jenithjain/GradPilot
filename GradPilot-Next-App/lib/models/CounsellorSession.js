@@ -68,7 +68,7 @@ const CounsellorSessionSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['active', 'completed', 'failed'],
+      enum: ['active', 'paused', 'completed', 'failed'],
       default: 'active',
       index: true,
     },
@@ -96,6 +96,14 @@ const CounsellorSessionSchema = new mongoose.Schema(
     lastEventAt: {
       type: Date,
       default: Date.now,
+    },
+    summary: {
+      type: String,
+      default: '',
+    },
+    followUpQuestions: {
+      type: [String],
+      default: [],
     },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
