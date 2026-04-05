@@ -29,7 +29,8 @@ import {
   Home,
   UploadCloud,
   ZoomIn,
-  Globe
+  Globe,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 // Removed ScrollArea (using native overflow containers for side panels)
@@ -60,6 +61,544 @@ const edgeTypes = {
   smartEdge: SmartEdge,
 };
 
+const nodeTypeLabels = {
+  strategy: 'Strategy Module',
+  copy: 'Copy Module',
+  image: 'Image Module',
+  video: 'Video Module',
+  research: 'Research Module',
+  exa_research: 'Web Research Module',
+  timeline: 'Timeline Module',
+  distribution: 'Distribution Module',
+  linkedin: 'LinkedIn Module',
+  twitter: 'Twitter Module',
+  email: 'Email Module',
+};
+
+function normalizeText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function htmlToPlainText(value) {
+  const input = String(value || '');
+  if (!input.includes('<')) return input;
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return input.replace(/<[^>]+>/g, ' ');
+  }
+
+  const withBreaks = input
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/\s*(p|div|li|h1|h2|h3|h4|h5|h6|ul|ol)\s*>/gi, '\n');
+
+  const container = document.createElement('div');
+  container.innerHTML = withBreaks;
+  return container.textContent || container.innerText || '';
+}
+
+function cleanForPdf(value, { preserveLines = true } = {}) {
+  const text = String(value || '')
+    .replace(/\r/g, '')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[–—]/g, '-')
+    .replace(/×/g, 'x')
+    .replace(/[•]/g, '-')
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ' ');
+
+  if (!preserveLines) {
+    return text
+      .replace(/\b(?:[A-Za-z]\s){2,}[A-Za-z]\b/g, (m) => m.replace(/\s/g, ''))
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  return text
+    .split('\n')
+    .map((line) => line
+      .replace(/\b(?:[A-Za-z]\s){2,}[A-Za-z]\b/g, (m) => m.replace(/\s/g, ''))
+      .replace(/\s+/g, ' ')
+      .trim()
+    )
+    .filter((line, idx, arr) => line || (idx > 0 && arr[idx - 1]))
+    .join('\n')
+    .trim();
+}
+
+function normalizeOutputText(value) {
+  return cleanForPdf(value, { preserveLines: true });
+}
+
+function markdownToReadableText(value) {
+  return cleanForPdf(
+    htmlToPlainText(String(value || ''))
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+      .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/^\s*```[\s\S]*?```\s*$/gm, '')
+      .replace(/\|\s*:?-{2,}:?\s*/g, ' ')
+      .replace(/^\s*[-]{2,}\s*$/gm, ''),
+    { preserveLines: true }
+  );
+}
+
+function toReadableLines(text, { maxLines = 12, maxLineLength = 180 } = {}) {
+  const lines = String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !line.startsWith('|'))
+    .filter((line) => !line.startsWith('```'))
+    .filter((line) => !/^[-_]{3,}$/.test(line))
+    .map((line) => line.replace(/^\d+\.\s*/, '').replace(/^[-*]\s*/, '').trim())
+    .filter((line) => line.length > 2);
+
+  const deduped = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(line.length > maxLineLength ? `${line.slice(0, maxLineLength - 3)}...` : line);
+    if (deduped.length >= maxLines) break;
+  }
+  return deduped;
+}
+
+function summarizeStrategy(strategyText) {
+  const lines = toReadableLines(markdownToReadableText(strategyText), { maxLines: 10, maxLineLength: 170 });
+  if (!lines.length) return ['No strategy narrative available.'];
+  return lines;
+}
+
+function summarizeGenericModuleOutput(raw, { maxLines = 10 } = {}) {
+  const readable = markdownToReadableText(raw);
+  const lines = toReadableLines(readable, { maxLines, maxLineLength: 170 });
+  return lines.length ? lines : ['No clear business summary available for this module output.'];
+}
+
+function humanizeFieldKey(key) {
+  return String(key || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function summarizeVoiceCounselling(voiceData) {
+  const studentProfile = voiceData?.studentProfile || {};
+  const counsellingProgress = voiceData?.counsellingProgress || {};
+  const latestConversation = voiceData?.latestConversation || null;
+
+  const profileEntries = Object.entries(studentProfile || {}).filter(([key, value]) => {
+    if (key === 'submittedAt' || key === 'submittedVia') return false;
+    if (value === null || value === undefined) return false;
+    if (Array.isArray(value) && value.length === 0) return false;
+    if (typeof value === 'string' && !value.trim()) return false;
+    return true;
+  });
+
+  const profileHighlights = profileEntries.slice(0, 10).map(([key, value]) => {
+    const rendered = Array.isArray(value) ? value.join(', ') : String(value);
+    return `${humanizeFieldKey(key)}: ${cleanForPdf(rendered, { preserveLines: false })}`;
+  });
+
+  const voiceLines = [];
+  voiceLines.push(`Profile fields captured by voice counselling: ${typeof counsellingProgress?.filledCount === 'number' ? counsellingProgress.filledCount : profileEntries.length}`);
+  if (typeof counsellingProgress?.totalCount === 'number') {
+    voiceLines.push(`Profile completion status: ${counsellingProgress.filledCount}/${counsellingProgress.totalCount}`);
+  }
+  if (Array.isArray(counsellingProgress?.missingLabels) && counsellingProgress.missingLabels.length > 0) {
+    voiceLines.push(`Missing details to complete profile: ${counsellingProgress.missingLabels.slice(0, 6).join(', ')}`);
+  }
+  if (latestConversation?.summary) {
+    voiceLines.push(`Latest voice call summary: ${cleanForPdf(latestConversation.summary, { preserveLines: false }).slice(0, 240)}`);
+  }
+  if (latestConversation?.callDurationSecs) {
+    const minutes = Math.max(1, Math.round(Number(latestConversation.callDurationSecs) / 60));
+    voiceLines.push(`Latest voice call duration: ~${minutes} minute(s)`);
+  }
+
+  return {
+    profileHighlights,
+    voiceLines,
+  };
+}
+
+function dedupeContactsByEmail(items = []) {
+  const map = new Map();
+  items.forEach((item) => {
+    const email = normalizeText(item?.email).toLowerCase();
+    if (!email || !email.includes('@')) return;
+    if (!map.has(email)) {
+      map.set(email, {
+        name: normalizeText(item?.name) || 'Lead',
+        email,
+        score: typeof item?.score === 'number' ? item.score : undefined,
+      });
+    }
+  });
+  return Array.from(map.values());
+}
+
+function safeModuleName(node) {
+  return normalizeText(node?.data?.label || nodeTypeLabels[node?.data?.type] || node?.id || 'Module')
+    .replace(/\bagent\b/gi, 'Module');
+}
+
+function isLikelyBusinessContact(contact) {
+  const email = normalizeText(contact?.email).toLowerCase();
+  const name = normalizeText(contact?.name).toLowerCase();
+  if (!email.includes('@')) return false;
+
+  const domain = email.split('@')[1] || '';
+  const personalProviders = new Set([
+    'gmail.com',
+    'yahoo.com',
+    'outlook.com',
+    'hotmail.com',
+    'icloud.com',
+    'protonmail.com',
+    'aol.com',
+    'live.com',
+  ]);
+
+  if (personalProviders.has(domain)) {
+    return /consult|admission|overseas|study abroad|education|counsell|mentor/i.test(name);
+  }
+
+  return /admit|consult|education|overseas|visa|university|college|fateh|edulytic|uni/i.test(domain + ' ' + name);
+}
+
+function extractNodeOutputForBusinessReport(node) {
+  const raw = String(node?.data?.output || '').trim();
+  if (!raw) return 'No output available.';
+
+  if (node?.data?.type === 'image') {
+    try {
+      const parsed = JSON.parse(raw);
+      const images = Array.isArray(parsed?.images) ? parsed.images : [];
+      if (images.length > 0) {
+        const lines = [`Generated visual creatives: ${images.length}`];
+        images.forEach((img, idx) => {
+          const theme = cleanForPdf(img?.theme || `Creative ${idx + 1}`, { preserveLines: false });
+          const url = cleanForPdf(img?.url || '', { preserveLines: false });
+          lines.push(`${idx + 1}. ${theme}`);
+          if (url) lines.push(`   URL: ${url}`);
+        });
+        return lines.join('\n');
+      }
+    } catch {}
+  }
+
+  if (node?.data?.type === 'video') {
+    try {
+      const parsed = JSON.parse(raw);
+      const prompts = Array.isArray(parsed?.visualPrompts) ? parsed.visualPrompts : [];
+      if (prompts.length > 0) {
+        const lines = [`Generated video concept scenes: ${prompts.length}`];
+        prompts.forEach((scene, idx) => {
+          lines.push(`${idx + 1}. ${cleanForPdf(scene?.sceneName || `Scene ${idx + 1}`, { preserveLines: false })}`);
+          if (scene?.mood) lines.push(`   Mood: ${cleanForPdf(scene.mood, { preserveLines: false })}`);
+          if (scene?.onScreenText) lines.push(`   On-screen text: ${cleanForPdf(scene.onScreenText, { preserveLines: false })}`);
+        });
+        return lines.join('\n');
+      }
+    } catch {}
+  }
+
+  if (node?.data?.type === 'copy') {
+    const readable = markdownToReadableText(raw);
+    const subjects = Array.from(readable.matchAll(/Subject:\s*([^\n]+)/gi)).map((m) => cleanForPdf(m[1], { preserveLines: false }));
+    const ctas = Array.from(readable.matchAll(/\b(Book Free Counselling|Check Your Eligibility|Talk to an Expert)\b/gi)).map((m) => m[1]);
+    const uniqueCtas = Array.from(new Set(ctas.map((v) => v.trim())));
+
+    const lines = [];
+    lines.push('Prepared 4-week nurture communication pack with email, social, and ad messaging.');
+    if (subjects.length > 0) {
+      lines.push(`Email subjects prepared: ${Math.min(subjects.length, 4)} highlighted below.`);
+      subjects.slice(0, 4).forEach((s, idx) => lines.push(`${idx + 1}. ${s}`));
+    }
+    if (uniqueCtas.length > 0) {
+      lines.push(`Primary calls-to-action: ${uniqueCtas.join(', ')}`);
+    }
+    return lines.join('\n');
+  }
+
+  if (node?.data?.type === 'timeline') {
+    const readable = markdownToReadableText(raw);
+    const weekMatches = Array.from(readable.matchAll(/Week\s*([1-4])\s*[:\-]?\s*([^\n]+)/gi));
+    const lines = [];
+    lines.push('Generated phased campaign timeline with weekly execution rhythm.');
+    if (weekMatches.length > 0) {
+      weekMatches.slice(0, 4).forEach((m) => {
+        lines.push(`Week ${m[1]} focus: ${cleanForPdf(m[2], { preserveLines: false })}`);
+      });
+    } else {
+      lines.push(...summarizeGenericModuleOutput(readable, { maxLines: 6 }));
+    }
+    return lines.join('\n');
+  }
+
+  if (node?.data?.type === 'exa_research') {
+    const metadata = node?.data?.metadata || {};
+    const studentLeads = typeof metadata.studentLeads === 'number' ? metadata.studentLeads : null;
+    const emailable = typeof metadata.emailableLeads === 'number' ? metadata.emailableLeads : null;
+    const sendable = typeof metadata.emailableSendableLeads === 'number' ? metadata.emailableSendableLeads : null;
+    const lines = ['Research and lead discovery completed with categorized lead scoring.'];
+    if (studentLeads !== null) lines.push(`Student leads identified: ${studentLeads}`);
+    if (emailable !== null) lines.push(`Leads with email found: ${emailable}`);
+    if (sendable !== null) lines.push(`Sendable leads (non-competitor/community): ${sendable}`);
+    if (lines.length > 1) return lines.join('\n');
+  }
+
+  if (node?.data?.type === 'email') {
+    const metadata = node?.data?.metadata || {};
+    const subject = cleanForPdf(metadata.subject || '', { preserveLines: false });
+    const sent = metadata?.sendStats?.sent;
+    const total = metadata?.sendStats?.total;
+    const sequenceLen = metadata.sequenceLength || metadata.sequenceCount;
+    const lines = ['Email outreach execution completed with tracked delivery metrics.'];
+    if (subject) lines.push(`Subject used: ${subject}`);
+    if (typeof sent === 'number' && typeof total === 'number') lines.push(`Delivered: ${sent} of ${total}`);
+    if (typeof sequenceLen === 'number') lines.push(`Sequence steps: ${sequenceLen}`);
+    return lines.join('\n');
+  }
+
+  return summarizeGenericModuleOutput(raw, { maxLines: 8 }).join('\n');
+}
+
+function collectBusinessData(nodes = []) {
+  const webNodes = nodes.filter((n) => n?.data?.type === 'exa_research');
+  const emailNodes = nodes.filter((n) => n?.data?.type === 'email');
+  const socialNodes = nodes.filter((n) => n?.data?.type === 'linkedin' || n?.data?.type === 'twitter');
+  const completedOutputs = nodes.filter((n) => normalizeText(n?.data?.output));
+
+  const studentLeads = dedupeContactsByEmail(
+    webNodes.flatMap((n) => Array.isArray(n?.data?.metadata?.studentLeadsWithEmail) ? n.data.metadata.studentLeadsWithEmail : [])
+  );
+
+  const allLeads = dedupeContactsByEmail(
+    webNodes.flatMap((n) => {
+      const sourceA = Array.isArray(n?.data?.metadata?.allLeadsWithEmail) ? n.data.metadata.allLeadsWithEmail : [];
+      const sourceB = Array.isArray(n?.data?.metadata?.leadsWithEmail) ? n.data.metadata.leadsWithEmail : [];
+      return [...sourceA, ...sourceB];
+    })
+  );
+
+  const sendStats = emailNodes.reduce(
+    (acc, node) => {
+      const stats = node?.data?.metadata?.sendStats || {};
+      const sent = typeof stats.sent === 'number' ? stats.sent : 0;
+      const total = typeof stats.total === 'number' ? stats.total : 0;
+      const recipients = typeof node?.data?.metadata?.recipientDiscovery?.finalRecipients === 'number'
+        ? node.data.metadata.recipientDiscovery.finalRecipients
+        : 0;
+      const sequenceLength = typeof node?.data?.metadata?.sequenceLength === 'number'
+        ? node.data.metadata.sequenceLength
+        : (typeof node?.data?.metadata?.sequenceCount === 'number' ? node.data.metadata.sequenceCount : 0);
+      acc.sent += sent;
+      acc.total += total;
+      acc.recipients = Math.max(acc.recipients, recipients);
+      acc.sequenceLength = Math.max(acc.sequenceLength, sequenceLength);
+      return acc;
+    },
+    { sent: 0, total: 0, recipients: 0, sequenceLength: 0 }
+  );
+
+  const imageCount = nodes.reduce((acc, node) => {
+    if (node?.data?.type !== 'image') return acc;
+    try {
+      const parsed = JSON.parse(node?.data?.output || '{}');
+      return acc + (Array.isArray(parsed?.images) ? parsed.images.length : 0);
+    } catch {
+      return acc;
+    }
+  }, 0);
+
+  const videoCount = nodes.reduce((acc, node) => {
+    if (node?.data?.type !== 'video') return acc;
+    const generatedVideos = node?.data?.generatedVideos;
+    if (generatedVideos && typeof generatedVideos === 'object') {
+      return acc + Object.keys(generatedVideos).length;
+    }
+    return acc;
+  }, 0);
+
+  const socialCount = socialNodes.filter((n) => normalizeText(n?.data?.output)).length;
+
+  const directTargets = dedupeContactsByEmail(
+    allLeads.filter((lead) => !isLikelyBusinessContact(lead))
+  );
+
+  const businessContacts = dedupeContactsByEmail(
+    allLeads.filter((lead) => isLikelyBusinessContact(lead))
+  );
+
+  const counsellorTargets = studentLeads.length > 0 ? studentLeads : directTargets;
+
+  return {
+    studentLeads,
+    allLeads,
+    directTargets,
+    businessContacts,
+    counsellorTargets,
+    sendStats,
+    imageCount,
+    videoCount,
+    socialCount,
+    completedOutputs,
+  };
+}
+
+function renderPdfLine(doc, state, text, options = {}) {
+  const {
+    size = 11,
+    style = 'normal',
+    color = [17, 24, 39],
+    indent = 0,
+    gap = 4,
+  } = options;
+
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 44;
+  const maxWidth = pageWidth - margin * 2 - indent;
+
+  doc.setFont('helvetica', style);
+  doc.setFontSize(size);
+  doc.setTextColor(color[0], color[1], color[2]);
+
+  const lines = doc.splitTextToSize(String(text || ''), Math.max(40, maxWidth));
+  const lineHeight = size * 1.35;
+
+  lines.forEach((line) => {
+    if (state.y + lineHeight > pageHeight - margin) {
+      doc.addPage();
+      state.y = margin;
+    }
+    doc.text(line, margin + indent, state.y);
+    state.y += lineHeight;
+  });
+
+  state.y += gap;
+}
+
+async function generateBusinessPdf({ brief, strategy, nodes, voiceData = null }) {
+  const { jsPDF } = await import('jspdf');
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const state = { y: 48 };
+  const data = collectBusinessData(nodes);
+  const now = new Date();
+  const totalReachable = data.counsellorTargets.length;
+  const studentReachable = data.studentLeads.length;
+  const strategyText = cleanForPdf(htmlToPlainText(strategy?.rationale || ''), { preserveLines: true }) || 'No strategy narrative available.';
+  const briefText = cleanForPdf(brief || '', { preserveLines: true }) || 'No campaign brief available.';
+  const voiceSummary = summarizeVoiceCounselling(voiceData);
+
+  renderPdfLine(doc, state, 'Campaign Business Report', { size: 20, style: 'bold', color: [5, 150, 105], gap: 8 });
+  renderPdfLine(doc, state, `Generated: ${now.toLocaleString()}`, { size: 10, color: [75, 85, 99], gap: 14 });
+
+  renderPdfLine(doc, state, '1) Executive Summary', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  renderPdfLine(doc, state, `- Total campaign modules with output: ${data.completedOutputs.length}`);
+  renderPdfLine(doc, state, `- Counsellor-ready contacts (email): ${totalReachable}`);
+  renderPdfLine(doc, state, `- Student-only contacts (email): ${studentReachable}`);
+  renderPdfLine(doc, state, `- Total contactable leads found: ${Math.max(data.allLeads.length, totalReachable)}`);
+  renderPdfLine(doc, state, `- Business/partner-like contacts separated out: ${data.businessContacts.length}`);
+  renderPdfLine(doc, state, `- Personalized email sequence steps prepared: ${data.sendStats.sequenceLength || 0}`);
+  renderPdfLine(doc, state, `- Email messages delivered: ${data.sendStats.sent}`);
+  renderPdfLine(doc, state, `- Social post drafts ready: ${data.socialCount}`);
+  renderPdfLine(doc, state, `- Creative assets ready (images/videos): ${data.imageCount}/${data.videoCount}`, { gap: 10 });
+
+  renderPdfLine(doc, state, '2) Business Opportunity View', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  renderPdfLine(doc, state, 'This campaign creates a counsellor outreach funnel from discovered leads to personalized follow-up and booking conversion.');
+  renderPdfLine(doc, state, 'Revenue planning formula (use your own numbers):');
+  renderPdfLine(doc, state, 'Potential Counselling Revenue = Counsellor-ready contacts x Expected conversion rate x Average counselling value', { style: 'bold', indent: 10 });
+  renderPdfLine(doc, state, `Current counsellor-ready contacts from this run: ${totalReachable}`, { indent: 10, gap: 2 });
+  renderPdfLine(doc, state, `Current student-only contacts from this run: ${studentReachable}`, { indent: 10, gap: 10 });
+
+  renderPdfLine(doc, state, '3) Counsellor Action Plan (Next 7 Days)', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  renderPdfLine(doc, state, '- Day 1-2: Prioritize direct contacts for first personalized outreach call or WhatsApp introduction.', { indent: 6, gap: 2 });
+  renderPdfLine(doc, state, '- Day 3-4: Offer IELTS-focused value content and invite to a counselling slot.', { indent: 6, gap: 2 });
+  renderPdfLine(doc, state, '- Day 5-6: Follow up non-responders with concise benefit-led message and booking link.', { indent: 6, gap: 2 });
+  renderPdfLine(doc, state, '- Day 7: Review responses and move high-intent contacts into admissions counselling workflow.', { indent: 6, gap: 10 });
+
+  renderPdfLine(doc, state, '4) Counsellor Target List (Priority)', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  if (data.counsellorTargets.length === 0) {
+    renderPdfLine(doc, state, 'No direct counsellor target list is available yet from this run.', { color: [107, 114, 128], gap: 2 });
+    renderPdfLine(doc, state, 'Recommendation: run one more web research cycle focused on student emails and form-capture channels.', { color: [107, 114, 128], gap: 10 });
+  } else {
+    const prioritized = [...data.counsellorTargets]
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, 25);
+    prioritized.forEach((lead, idx) => {
+      const scoreText = typeof lead.score === 'number' ? ` | Priority Score: ${lead.score}` : '';
+      renderPdfLine(doc, state, `${idx + 1}. ${lead.name} | ${lead.email}${scoreText}`, { indent: 8, gap: 2 });
+    });
+    state.y += 6;
+  }
+
+  if (data.businessContacts.length > 0) {
+    renderPdfLine(doc, state, 'Separated Business/Partner Contacts (Do Not Use For Student Counselling Outreach)', { size: 12, style: 'bold', color: [180, 83, 9], gap: 4 });
+    data.businessContacts.slice(0, 20).forEach((lead, idx) => {
+      renderPdfLine(doc, state, `${idx + 1}. ${lead.name} | ${lead.email}`, { indent: 8, color: [180, 83, 9], gap: 2 });
+    });
+    state.y += 6;
+  }
+
+  renderPdfLine(doc, state, '5) Campaign Brief (Business Context)', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  toReadableLines(briefText, { maxLines: 4, maxLineLength: 180 }).forEach((line) => {
+    renderPdfLine(doc, state, `- ${line}`, { indent: 6, gap: 2 });
+  });
+  state.y += 8;
+
+  renderPdfLine(doc, state, '6) Strategy Narrative (Business Language)', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  summarizeStrategy(strategyText).forEach((line) => {
+    renderPdfLine(doc, state, `- ${line}`, { indent: 6, gap: 2 });
+  });
+  state.y += 8;
+
+  renderPdfLine(doc, state, '7) Voice Counselling Insights (ElevenLabs)', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  if (!voiceData || (voiceSummary.profileHighlights.length === 0 && voiceSummary.voiceLines.length === 0)) {
+    renderPdfLine(doc, state, '- No ElevenLabs voice counselling data found for this user yet.', { indent: 6, gap: 2 });
+    renderPdfLine(doc, state, '- Recommendation: run one voice counselling call to capture richer student profile and intent signals.', { indent: 6, gap: 8 });
+  } else {
+    voiceSummary.voiceLines.forEach((line) => {
+      renderPdfLine(doc, state, `- ${line}`, { indent: 6, gap: 2 });
+    });
+    if (voiceSummary.profileHighlights.length > 0) {
+      renderPdfLine(doc, state, 'Top profile details captured:', { indent: 6, style: 'bold', size: 11, gap: 2 });
+      voiceSummary.profileHighlights.forEach((line) => {
+        renderPdfLine(doc, state, `- ${line}`, { indent: 12, gap: 2 });
+      });
+    }
+    state.y += 6;
+  }
+
+  renderPdfLine(doc, state, '8) Module Deliverables (Readable Highlights)', { size: 14, style: 'bold', color: [17, 24, 39], gap: 6 });
+  if (data.completedOutputs.length === 0) {
+    renderPdfLine(doc, state, 'No generated outputs were found to include.', { color: [107, 114, 128], gap: 10 });
+  } else {
+    data.completedOutputs.forEach((node, idx) => {
+      const title = safeModuleName(node);
+      renderPdfLine(doc, state, `${idx + 1}. ${title}`, { size: 12, style: 'bold', color: [5, 150, 105], gap: 4 });
+      const summaryLines = extractNodeOutputForBusinessReport(node)
+        .split('\n')
+        .map((line) => cleanForPdf(line, { preserveLines: false }))
+        .filter(Boolean)
+        .slice(0, 12);
+      summaryLines.forEach((line) => {
+        renderPdfLine(doc, state, `- ${line}`, { indent: 8, gap: 2 });
+      });
+      state.y += 6;
+    });
+  }
+
+  return doc;
+}
+
 export default function CampaignCanvasPage() {
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -87,6 +626,7 @@ export default function CampaignCanvasPage() {
   const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(false);
   const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
   const [kycProfile, setKycProfile] = useState(null);
+  const [kycSnapshot, setKycSnapshot] = useState(null);
   const [activeWorkflowRunId, setActiveWorkflowRunId] = useState(null);
 
   const {
@@ -160,6 +700,7 @@ export default function CampaignCanvasPage() {
         const res = await fetch('/api/kyc');
         const json = await res.json();
         if (json?.studentProfile) setKycProfile(json.studentProfile);
+        if (json && typeof json === 'object') setKycSnapshot(json);
       } catch {}
     })();
   }, []);
@@ -331,6 +872,22 @@ export default function CampaignCanvasPage() {
     URL.revokeObjectURL(url);
 
     toast.success('Campaign exported!');
+  };
+
+  const handleGenerateReport = async () => {
+    try {
+      const doc = await generateBusinessPdf({
+        brief,
+        strategy,
+        nodes: storeNodes,
+        voiceData: kycSnapshot,
+      });
+      doc.save(`campaign-business-report-${Date.now()}.pdf`);
+      toast.success('Business PDF report downloaded');
+    } catch (error) {
+      console.error('Failed to generate report', error);
+      toast.error('Failed to generate report');
+    }
   };
 
   // Save current workflow to server
@@ -692,6 +1249,16 @@ export default function CampaignCanvasPage() {
                 >
                   <Download className="w-3.5 h-3.5 mr-1.5" />
                   Export
+                </Button>
+
+                <Button
+                  onClick={handleGenerateReport}
+                  variant="outline"
+                  size="sm"
+                  className="h-8 bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-700 dark:text-amber-300"
+                >
+                  <FileText className="w-3.5 h-3.5 mr-1.5" />
+                  Business PDF
                 </Button>
 
                 <Button
