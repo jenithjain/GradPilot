@@ -7,6 +7,11 @@ const nextConfig = {
       bodySizeLimit: '10mb',
     },
   },
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: 'api.qrserver.com' },
+    ],
+  },
 };
 
 export default nextConfig;

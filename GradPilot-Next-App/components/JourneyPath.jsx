@@ -90,7 +90,19 @@ export const JOURNEY_STEPS = [
 ];
 
 // ─── Status helpers ────────────────────────────────────────────────────────────
-function deriveStatuses(readinessScore, data) {
+function deriveStatuses(readinessScore, data, dynamicSteps) {
+  // If AI-generated statuses are available, use them (must be array of 7)
+  if (Array.isArray(dynamicSteps) && dynamicSteps.length === 7) {
+    const validStatuses = ["completed", "current", "locked"];
+    const mapped = dynamicSteps.map((s) => {
+      const st = (s.status || "").toLowerCase();
+      return validStatuses.includes(st) ? st : "locked";
+    });
+    // Ensure at least the first step is completed (profile was filled)
+    if (mapped[0] === "locked") mapped[0] = "completed";
+    return mapped;
+  }
+
   // first step always complete (they filled the form), derive the rest from data
   const testDone       = data?.testStatus === "Taken";
   const testPreparing  = data?.testStatus === "Preparing";
@@ -421,7 +433,7 @@ function JourneyNode({ step, status, isLast, isRight, avatar, avatarAccent, inde
             <div
               className="w-0.5 transition-all duration-1000"
               style={{
-                height: 40,
+                height: 72,
                 background: isCompleted
                   ? `linear-gradient(to bottom, ${step.color}88, ${step.color}44)`
                   : isDark ? "rgba(255,255,255,0.08)" : "rgba(15,23,42,0.10)",
@@ -483,7 +495,7 @@ function JourneyNode({ step, status, isLast, isRight, avatar, avatarAccent, inde
             <div
               className="w-0.5"
               style={{
-                height: 40,
+                height: 72,
                 background: isCompleted
                   ? `linear-gradient(to bottom, ${step.color}44, ${isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.06)"})`
                   : isDark ? "rgba(255,255,255,0.08)" : "rgba(15,23,42,0.10)",
@@ -527,10 +539,27 @@ function JourneyNode({ step, status, isLast, isRight, avatar, avatarAccent, inde
 }
 
 // ─── Main exported component ───────────────────────────────────────────────────
-export default function JourneyPath({ avatar, avatarAccent, readinessScore, data }) {
+export default function JourneyPath({ avatar, avatarAccent, readinessScore, data, dynamicSteps }) {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  const statuses = deriveStatuses(readinessScore ?? 65, data);
+  const statuses = deriveStatuses(readinessScore ?? 65, data, dynamicSteps);
+
+  // Merge AI-generated content into steps
+  const steps = JOURNEY_STEPS.map((base) => {
+    const override = Array.isArray(dynamicSteps)
+      ? dynamicSteps.find((d) => d.id === base.id)
+      : null;
+    if (!override) return base;
+    return {
+      ...base,
+      description: override.description || base.description,
+      actions: Array.isArray(override.actions) && override.actions.length > 0
+        ? override.actions
+        : base.actions,
+      cta: override.goal || base.cta,
+    };
+  });
+
   const wrapBg  = isDark ? "linear-gradient(160deg,rgba(10,6,30,0.82) 0%,rgba(6,6,20,0.90) 100%)" : "linear-gradient(160deg,rgba(238,242,255,0.90) 0%,rgba(248,250,252,0.95) 100%)";
   const wrapBdr = isDark ? "rgba(255,255,255,0.07)" : "rgba(99,102,241,0.14)";
   const labelClr = isDark ? "rgba(255,255,255,0.25)" : "rgba(15,23,42,0.40)";
@@ -554,20 +583,20 @@ export default function JourneyPath({ avatar, avatarAccent, readinessScore, data
           className="rounded-full px-3.5 py-1.5 text-xs font-bold"
           style={{ background: badgeBg, border: `1px solid ${badgeBdr}`, color: badgeTxt }}
         >
-          {statuses.filter((s) => s === "completed").length} / {JOURNEY_STEPS.length} Done
+          {statuses.filter((s) => s === "completed").length} / {steps.length} Done
         </span>
       </div>
 
-      <ProgressHeader statuses={statuses} total={JOURNEY_STEPS.length} isDark={isDark} />
+      <ProgressHeader statuses={statuses} total={steps.length} isDark={isDark} />
 
       {/* Path nodes */}
       <div className="relative mx-auto max-w-3xl">
-        {JOURNEY_STEPS.map((step, i) => (
+        {steps.map((step, i) => (
           <JourneyNode
             key={step.id}
             step={step}
             status={statuses[i]}
-            isLast={i === JOURNEY_STEPS.length - 1}
+            isLast={i === steps.length - 1}
             isRight={i % 2 === 1}
             avatar={statuses[i] === "current" ? avatar : null}
             avatarAccent={avatarAccent}

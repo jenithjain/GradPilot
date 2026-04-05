@@ -13,7 +13,8 @@ import {
   Lightbulb,
   FolderOpen,
   Clock,
-  ChevronRight
+  ChevronRight,
+  Trash2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -199,6 +200,22 @@ function CampaignPageContent() {
     setWorkflow(wf.nodes || [], wf.edges || []);
     toast.success('Workflow loaded');
     router.push('/campaign/canvas');
+  };
+
+  const handleDeleteWorkflow = async (e, wfId) => {
+    e.stopPropagation();
+    if (!confirm('Delete this workflow? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`/api/workflows/${wfId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSavedWorkflows((prev) => prev.filter((w) => (w._id || w.id) !== wfId));
+        toast.success('Workflow deleted');
+      } else {
+        toast.error('Failed to delete workflow');
+      }
+    } catch {
+      toast.error('Failed to delete workflow');
+    }
   };
 
   // Import workflow JSON (drag/drop or file input)
@@ -475,29 +492,38 @@ function CampaignPageContent() {
               ) : (
                 <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                   {savedWorkflows.map((wf, i) => (
-                    <button
-                      key={wf._id ? String(wf._id) : `wf-${i}`}
-                      onClick={() => handleLoadWorkflow(wf)}
-                      className="w-full p-3 rounded-lg border border-border bg-muted/20 hover:bg-accent hover:border-emerald-500/30 transition-all duration-200 text-left group"
+                    <div
+                      key={wf._id ? String(wf._id) : (wf.id || `wf-${i}`)}
+                      className="flex items-center gap-2 p-3 rounded-lg border border-border bg-muted/20 hover:bg-accent hover:border-emerald-500/30 transition-all duration-200 group"
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
-                            {wf.brief || 'Untitled Workflow'}
-                          </p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <Clock className="w-3 h-3 text-muted-foreground" />
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(wf.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              · {wf.nodes?.length || 0} nodes
-                            </span>
-                          </div>
+                      <button
+                        onClick={() => handleLoadWorkflow(wf)}
+                        className="flex-1 min-w-0 text-left"
+                      >
+                        <p className="text-sm font-medium text-foreground truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                          {wf.brief || 'Untitled Workflow'}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Clock className="w-3 h-3 text-muted-foreground" />
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(wf.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            · {wf.nodes?.length || 0} nodes
+                          </span>
                         </div>
-                        <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-emerald-500 transition-colors mt-0.5 shrink-0" />
+                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={(e) => handleDeleteWorkflow(e, wf._id || wf.id)}
+                          className="p-1.5 rounded-md hover:bg-red-100 dark:hover:bg-red-500/20 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                          title="Delete workflow"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-emerald-500 transition-colors" />
                       </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}

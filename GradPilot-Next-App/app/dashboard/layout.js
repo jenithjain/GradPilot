@@ -1,9 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
 import StaggeredMenu from "@/components/StaggeredMenu";
+import WhatsAppPoller from "@/components/WhatsAppPoller";
 
 export default function DashboardLayout({ children }) {
+  const { data: session } = useSession();
   const [menuBtnColor, setMenuBtnColor] = useState('#000000');
 
   useEffect(() => {
@@ -25,6 +28,17 @@ export default function DashboardLayout({ children }) {
     return () => observer.disconnect();
   }, []);
 
+  const role = session?.user?.role;
+
+  const navItems = role === 'counsellor'
+    ? [
+        { label: "Dashboard", link: "/dashboard/counsellor", ariaLabel: "Counsellor Dashboard" },
+        { label: "Campaign AI", link: "/campaign", ariaLabel: "AI Campaign Generator" },
+      ]
+    : [
+        { label: "Dashboard", link: "/dashboard", ariaLabel: "Student Dashboard" },
+      ];
+
   return (
     <>
       {/* Navbar */}
@@ -38,13 +52,7 @@ export default function DashboardLayout({ children }) {
             colors={["#0f172a", "#111827", "#1f2937"]}
             menuButtonColor={menuBtnColor}
             openMenuButtonColor="#22c55e"
-            items={[
-              { label: "Home", link: "/", ariaLabel: "Go to Home" },
-              { label: "Dashboard", link: "/dashboard", ariaLabel: "View Dashboard" },
-              { label: "Campaign AI", link: "/campaign", ariaLabel: "AI Campaign Generator" },
-              { label: "Audit Log", link: "/audit", ariaLabel: "View Audit Log" },
-              { label: "Profile", link: "/profile", ariaLabel: "View Profile" },
-            ]}
+            items={navItems}
           />
         </div>
       </div>
@@ -53,6 +61,9 @@ export default function DashboardLayout({ children }) {
       <main className="pt-20">
         {children}
       </main>
+
+      {/* Background WhatsApp message poller (no webhook needed) */}
+      <WhatsAppPoller />
     </>
   );
 }

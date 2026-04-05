@@ -397,3 +397,84 @@ html {
 .campaign-markdown pre code { display: block; padding: 0.6rem; font-size: 0.7rem; }
 .campaign-markdown blockquote { background: var(--muted); padding: 0.4rem 0.6rem; border-left: 3px solid oklch(0.6 0.118 184.704); margin: 0.6rem 0; font-style: italic; }
 
+/* ── React Calendar (counsellor schedule) ── */
+.counsellor-calendar {
+  font-family: inherit;
+  background: transparent !important;
+}
+.counsellor-calendar .react-calendar__navigation {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.counsellor-calendar .react-calendar__navigation button {
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.counsellor-calendar .react-calendar__navigation button:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+.counsellor-calendar .react-calendar__navigation button:disabled {
+  opacity: 0.3;
+}
+.counsellor-calendar .react-calendar__month-view__weekdays {
+  display: grid !important;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.counsellor-calendar .react-calendar__month-view__weekdays abbr {
+  text-decoration: none;
+}
+.counsellor-calendar .react-calendar__month-view__days {
+  display: grid !important;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.counsellor-calendar .react-calendar__tile {
+  background: none;
+  border: none;
+  padding: 8px 4px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--foreground);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 44px;
+}
+.counsellor-calendar .react-calendar__tile:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+.counsellor-calendar .react-calendar__tile--active {
+  background: rgba(59, 130, 246, 0.15) !important;
+  color: #3b82f6 !important;
+  font-weight: 700;
+}
+.counsellor-calendar .react-calendar__tile--now {
+  background: rgba(16, 185, 129, 0.1);
+  font-weight: 700;
+  color: #10b981;
+}
+.counsellor-calendar .react-calendar__tile--now.react-calendar__tile--active {
+  background: rgba(59, 130, 246, 0.15) !important;
+  color: #3b82f6 !important;
+}
+.counsellor-calendar .react-calendar__month-view__days__day--neighboringMonth {
+  opacity: 0.3;
+}
+

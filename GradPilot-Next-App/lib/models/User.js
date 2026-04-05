@@ -116,6 +116,34 @@ const StudentProfileSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const DashboardAnalysisSchema = new mongoose.Schema({
+  profileFingerprint: {
+    type: String,
+    default: null,
+  },
+  missingFields: {
+    type: [String],
+    default: [],
+  },
+  source: {
+    type: String,
+    enum: ['gemini', 'local'],
+    default: 'local',
+  },
+  model: {
+    type: String,
+    default: 'local-rules',
+  },
+  generatedAt: {
+    type: Date,
+    default: Date.now,
+  },
+  analysis: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
+}, { _id: false });
+
 /**
  * User Schema with Embedded KYC
  */
@@ -170,6 +198,12 @@ const UserSchema = new mongoose.Schema({
   hasCompletedKYC: {
     type: Boolean,
     default: false
+  },
+
+  // Persisted AI dashboard analysis so refreshes don't repeatedly call Gemini
+  dashboardAnalysis: {
+    type: DashboardAnalysisSchema,
+    default: null,
   },
   
   // Social Media Tokens

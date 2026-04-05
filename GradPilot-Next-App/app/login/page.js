@@ -115,9 +115,16 @@ export default function LoginPage() {
         );
         
         // Small delay for better UX
-        setTimeout(() => {
-          // Always go to dashboard after signup/signin — onboarding is initiated from the dashboard
-          router.push("/dashboard");
+        setTimeout(async () => {
+          // Fetch session to determine role-based redirect
+          try {
+            const sessionRes = await fetch('/api/auth/session');
+            const sessionData = await sessionRes.json();
+            const dest = sessionData?.user?.role === 'counsellor' ? '/dashboard/counsellor' : '/dashboard';
+            router.push(dest);
+          } catch {
+            router.push('/dashboard');
+          }
           router.refresh();
         }, 500);
       }
