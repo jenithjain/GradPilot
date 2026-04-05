@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import StaggeredMenu from "@/components/StaggeredMenu";
+import WhatsAppPoller from "@/components/WhatsAppPoller";
 
 export default function DashboardLayout({ children }) {
   const [menuBtnColor, setMenuBtnColor] = useState('#000000');
@@ -53,6 +54,9 @@ export default function DashboardLayout({ children }) {
       <main className="pt-20">
         {children}
       </main>
+
+      {/* Background WhatsApp message poller (no webhook needed) */}
+      <WhatsAppPoller />
     </>
   );
 }

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import JourneyPath from "@/components/JourneyPath";
 import { getCounsellingFieldValue } from "@/lib/counselling-profile";
+import WhatsAppScheduleCard from "@/components/WhatsAppScheduleCard";
 
 const PIE_COLORS = ["#10b981", "#0ea5e9", "#8b5cf6", "#f59e0b", "#ef4444", "#ec4899"];
 
@@ -855,6 +856,9 @@ export default function CompleteDashboard() {
               </div>
             </CardContent>
           </Card>
+
+          {/* WhatsApp 1:1 Booking */}
+          <WhatsAppScheduleCard />
 
           {/* Follow-up Tracker — AI-powered sessions */}
           <Card className="border-border/40 bg-linear-to-b from-indigo-50/60 to-card/90 dark:from-indigo-950/20 dark:to-card/90 backdrop-blur-sm">
