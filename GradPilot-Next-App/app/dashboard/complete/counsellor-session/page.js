@@ -6,7 +6,7 @@ import { ArrowLeft, Loader2, Mic, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
-const EMBED_SRC = "https://embed.liveavatar.com/v1/4d99945d-c582-48ca-b6b6-bfb5ea3657ae";
+const EMBED_SRC = "https://embed.liveavatar.com/v1/7665c3a7-6fe9-4734-a1a0-e8ddfd7cb585";
 const EMBED_ORIGIN = "https://embed.liveavatar.com";
 
 function buildEvent(messageEvent) {
