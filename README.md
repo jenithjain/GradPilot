@@ -1,5 +1,11 @@
 # GradPilot: AI-Native Overseas Education Counselling Platform
 
+# Demo video:
+
+
+https://github.com/user-attachments/assets/b0a904b8-1c80-4f5d-aafa-055d10d2e9b9
+
+
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
